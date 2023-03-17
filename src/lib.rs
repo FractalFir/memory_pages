@@ -1,5 +1,6 @@
 use std::borrow::{Borrow, BorrowMut};
 use std::marker::PhantomData;
+use std::ops::{Deref,DerefMut};
 const PAGE_SIZE: usize = 0x1000;
 #[cfg(target_family = "unix")]
 const MAP_ANYNOMUS: c_int = 0x20;
@@ -53,9 +54,12 @@ impl WritePremisionMarker for DenyWrite {
         0
     }
 }
-/// Marks page as allowing execution. **WARINIG** do *NOT* set if not needed. Do this only if you can be sure that: 
-// 1. Native instructions inside this page are 100% safe
-// 2. Native instructions inside this page may only ever be changed by a 100% safe code. Preferably, set page to allow execution only when writes are disabled. To do this flip in one call, use [`Page::set_protected_exec`].  
+/// Marks page as allowing execution.
+/// **WARNING** do *NOT* set this permission if not necessary!
+/// # Safety
+/// Set [`AllowExec`] permission  only if you can be sure that: 
+/// 1. Native instructions inside this page are 100% safe
+/// 2. Native instructions inside this page may only ever be changed by a 100% safe code. Preferably, set page to allow execution only when writes are disabled. To do this flip in one call, use [`Page::set_protected_exec`].  
 pub struct AllowExec;
 impl ExecPremisionMarker for AllowExec {
     #[cfg(target_family = "unix")]
@@ -114,7 +118,7 @@ impl<R: ReadPremisionMarker, W: WritePremisionMarker, E: ExecPremisionMarker> Pa
         R::bitmask() | W::bitmask() | E::bitmask()
     }
     #[cfg(target_family = "unix")]#[must_use]
-    ///
+    /// Allocates new pages of size at least length, rounded up to next page boundary if necessary.
     /// # Panics
     /// Panics when a 0-sized allocation is attempted, or if kernel can't/refuses to allocate requested pages(Should never happen).
     pub fn new(length: usize) -> Self {
@@ -151,23 +155,48 @@ impl<R: ReadPremisionMarker, W: WritePremisionMarker, E: ExecPremisionMarker> Pa
             panic!("Failed to change memory protection mode:'{err}'!");
         }
     }
+    fn into_prot<TR: ReadPremisionMarker, TW: WritePremisionMarker, TE: ExecPremisionMarker>(self)->Page<TR,TW,TE>{
+        let mut res = Page {
+            ptr: self.ptr,
+            len: self.len,
+            read: PhantomData,
+            write: PhantomData,
+            exec: PhantomData,
+        };
+        std::mem::forget(self);
+        res.set_prot();
+        res
+    }
 }
+
 impl<W: WritePremisionMarker, E: ExecPremisionMarker> std::ops::Index<usize>
     for Page<AllowRead, W, E>
 {
     type Output = u8;
     fn index(&self, index: usize) -> &u8 {
-        unsafe { &std::slice::from_raw_parts(self.ptr, self.len)[index] }
+        let slice:&[u8] = self;
+        &slice[index]
     }
 }
 impl<W: WritePremisionMarker, E: ExecPremisionMarker> Borrow<[u8]> for Page<AllowRead, W, E> {
     fn borrow(&self) -> &[u8] {
+        self
+    }
+}
+impl<W: WritePremisionMarker, E: ExecPremisionMarker> Deref for Page<AllowRead, W, E> {
+    type Target = [u8];
+    fn deref(&self) -> &Self::Target {
         unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
+    }
+}
+impl<E: ExecPremisionMarker> DerefMut for Page<AllowRead, AllowWrite, E> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { std::slice::from_raw_parts_mut(self.ptr, self.len) }
     }
 }
 impl<E: ExecPremisionMarker> BorrowMut<[u8]> for Page<AllowRead, AllowWrite, E> {
     fn borrow_mut(&mut self) -> &mut [u8] {
-        unsafe { std::slice::from_raw_parts_mut(self.ptr, self.len) }
+        self
     }
 }
 impl<E: ExecPremisionMarker> std::ops::IndexMut<usize> for Page<AllowRead, AllowWrite, E> {
@@ -175,124 +204,61 @@ impl<E: ExecPremisionMarker> std::ops::IndexMut<usize> for Page<AllowRead, Allow
         unsafe { &mut std::slice::from_raw_parts_mut(self.ptr, self.len)[index] }
     }
 }
+/// If pointer is marked like that: `*const ExecutableMemory` it means that memory it points to can be jumped to and excuted. It *does not* guarantee that this memory may be read or written into. 
+pub struct ExecutableMemory;
 impl<R: ReadPremisionMarker, W: WritePremisionMarker> Page<R, W, AllowExec> {
-    pub fn get_fn_ptr(&self, offset: usize) -> *mut u8 {
-        unsafe {std::ptr::addr_of_mut!(std::slice::from_raw_parts_mut(self.ptr, self.len)[offset])}
+    /// Returns a pointer to executable code at *offset*. Works identically to getting a pointer using [`Self::get_ptr`] or 
+    /// [`Self::get_ptr_mut`] but ensures that execute permission is set to allow(if not this function is unavailable), and 
+    /// clearly conveys the intent of programmer.
+    pub fn get_fn_ptr(&self, offset: usize) -> *const ExecutableMemory{
+        unsafe {std::ptr::addr_of!(std::slice::from_raw_parts(self.ptr, self.len)[offset]).cast()}
     }
 }
 impl<R: ReadPremisionMarker, W: WritePremisionMarker> Page<R, W, AllowExec> {
     #[must_use]
     pub fn deny_exec(self) -> Page<R, W, DenyExec> {
-        let mut res = Page {
-            ptr: self.ptr,
-            len: self.len,
-            read: PhantomData,
-            write: PhantomData,
-            exec: PhantomData,
-        };
-        std::mem::forget(self);
-        res.set_prot();
-        res
+        self.into_prot()
     }
 }
 impl<R: ReadPremisionMarker, W: WritePremisionMarker> Page<R, W, DenyExec> {
     #[must_use]
     pub fn allow_exec(self) -> Page<R, W, AllowExec> {
-        let mut res = Page {
-            ptr: self.ptr,
-            len: self.len,
-            read: PhantomData,
-            write: PhantomData,
-            exec: PhantomData,
-        };
-        std::mem::forget(self);
-        res.set_prot();
-        res
+        self.into_prot()
     }
     pub fn set_protected_exec(self)-> Page<R, DenyWrite, AllowExec> {
-        let mut res = Page {
-            ptr: self.ptr,
-            len: self.len,
-            read: PhantomData,
-            write: PhantomData,
-            exec: PhantomData,
-        };
-        std::mem::forget(self);
-        res.set_prot();
-        res
+        self.into_prot()
     }
 }
 impl<R: ReadPremisionMarker, E: ExecPremisionMarker> Page<R, DenyWrite, E> {
     #[must_use]
     pub fn allow_write(self) -> Page<R, AllowWrite, E> {
-        let mut res = Page {
-            ptr: self.ptr,
-            len: self.len,
-            read: PhantomData,
-            write: PhantomData,
-            exec: PhantomData,
-        };
-        std::mem::forget(self);
-        res.set_prot();
-        res
+        self.into_prot()
     }
     pub fn allow_write_no_exec(self)-> Page<R, AllowWrite, DenyExec> {
-        let mut res = Page {
-            ptr: self.ptr,
-            len: self.len,
-            read: PhantomData,
-            write: PhantomData,
-            exec: PhantomData,
-        };
-        std::mem::forget(self);
-        res.set_prot();
-        res
+        self.into_prot()
     }
     
 }
 impl<R: ReadPremisionMarker, E: ExecPremisionMarker> Page<R, AllowWrite, E> {
     #[must_use]
     pub fn deny_write(self) -> Page<R, DenyWrite, E> {
-        let mut res = Page {
-            ptr: self.ptr,
-            len: self.len,
-            read: PhantomData,
-            write: PhantomData,
-            exec: PhantomData,
-        };
-        std::mem::forget(self);
-        res.set_prot();
-        res
+        self.into_prot()
     }
 }
 impl<W: WritePremisionMarker, E: ExecPremisionMarker> Page<DenyRead, W, E> {
     #[must_use]
     pub fn allow_read(self) -> Page<AllowRead, W, E> {
-        let mut res = Page {
-            ptr: self.ptr,
-            len: self.len,
-            read: PhantomData,
-            write: PhantomData,
-            exec: PhantomData,
-        };
-        std::mem::forget(self);
-        res.set_prot();
-        res
+        self.into_prot()
     }
 }
 impl<W: WritePremisionMarker, E: ExecPremisionMarker> Page<AllowRead, W, E> {
     #[must_use]
     pub fn deny_read(self) -> Page<DenyRead, W, E> {
-        let mut res = Page {
-            ptr: self.ptr,
-            len: self.len,
-            read: PhantomData,
-            write: PhantomData,
-            exec: PhantomData,
-        };
-        std::mem::forget(self);
-        res.set_prot();
-        res
+        self.into_prot()
+    }
+}impl<W: WritePremisionMarker, E: ExecPremisionMarker> Page<AllowRead, W, E> {
+    pub fn get_ptr(&self,offset:usize)->*const u8{
+        std::ptr::addr_of!(self[offset])
     }
 }
 impl<R: ReadPremisionMarker, W: WritePremisionMarker, E: ExecPremisionMarker> Drop
