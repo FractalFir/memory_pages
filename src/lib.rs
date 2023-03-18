@@ -1,9 +1,12 @@
+#![warn(missing_docs)]
+#![warn(rustdoc::missing_doc_code_examples)]
 mod extern_fn_ptr;
 use core::fmt::Pointer;
 use extern_fn_ptr::ExternFnPtr;
 use std::borrow::{Borrow, BorrowMut};
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
+// TODO: maybe make allow/deny for all `Pages`?
 #[cfg(target_family = "windows")]
 use winapi::um::memoryapi::*;
 #[cfg(target_family = "windows")]
@@ -11,6 +14,9 @@ use winapi::um::winnt::{
     MEM_COMMIT, MEM_RELEASE, PAGE_EXECUTE, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE,
     PAGE_NOACCESS, PAGE_READONLY, PAGE_READWRITE,
 };
+const fn next_page_boundary(size:usize)->usize{
+    ((size + PAGE_SIZE - 1)/PAGE_SIZE)*PAGE_SIZE
+}
 const PAGE_SIZE: usize = 0x1000;
 #[cfg(target_family = "unix")]
 const MAP_ANYNOMUS: c_int = 0x20;
@@ -36,23 +42,29 @@ extern "C" {
 }
 /// Marks if a [`Pages`] can be read from.
 pub trait ReadPremisionMarker {
-    #[cfg(target_family = "unix")]
+    #[cfg(all(target_family = "unix"))]
+    #[doc(hidden)]
     fn bitmask() -> c_int;
     #[cfg(target_family = "windows")]
+    #[doc(hidden)]
     fn allow_read() -> bool;
 }
 /// Marks if a [`Pages`] can be written into.
 pub trait WritePremisionMarker {
     #[cfg(target_family = "unix")]
+    #[doc(hidden)]
     fn bitmask() -> c_int;
     #[cfg(target_family = "windows")]
+    #[doc(hidden)]
     fn allow_write() -> bool;
 }
-/// Marks if native CPU instructions stored inside [`Pages`] can jumped to and executed.
+/// Marks if native CPU instructions stored inside [`Pages`] can jumped to and executed. 
 pub trait ExecPremisionMarker {
     #[cfg(target_family = "unix")]
+    #[doc(hidden)]
     fn bitmask() -> c_int;
     #[cfg(target_family = "windows")]
+    #[doc(hidden)]
     fn allow_exec() -> bool;
 }
 /// Marks [`Pages`] as allowing to be read from.
@@ -142,12 +154,26 @@ pub struct Pages<R: ReadPremisionMarker, W: WritePremisionMarker, E: ExecPremisi
 }
 #[cfg(target_family = "unix")]
 fn erno() -> c_int {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux",target_os = "redox"))]
     {
         extern "C" {
             fn __errno_location() -> *mut c_int;
         }
         unsafe { *__errno_location() }
+    }
+    #[cfg(any(target_os = "solaris",target_os = "illumos"))]
+    {
+        extern "C" {
+            fn ___errno() -> *mut c_int;
+        }
+        unsafe { *___errno() }
+    }
+    #[cfg(any(target_os = "macos",target_os = "ios",target_os = "freebsd"))]
+    {
+        extern "C" {
+            fn __error() -> *mut c_int;
+        }
+        unsafe { *__error() }
     }
 }
 #[cfg(target_family = "unix")]
@@ -182,6 +208,26 @@ impl<R: ReadPremisionMarker, W: WritePremisionMarker, E: ExecPremisionMarker> Pa
     /// Allocates new [`Pages`] of size at least length, rounded up to next Page boundary if necessary.
     /// # Panics
     /// Panics when a 0-sized allocation is attempted, or if kernel can't/refuses to allocate requested Pages(Should never happen).
+    /// # Examples
+    /// Allocating pages works with sizes divisible by size of the page:
+    ///```
+    /// # use pages::*;
+    /// let memory:Pages<AllowRead,AllowWrite,DenyExec> = Pages::new(0x8000);
+    /// assert_eq!(memory.len(),0x8000);
+    ///```
+    /// And allocation sized not divisible by the size of the page:
+    ///```
+    /// # use pages::*;
+    /// let memory:Pages<AllowRead,AllowWrite,DenyExec> = Pages::new(0x1234);
+    /// // Rounds up to the next page boundary, so that length of the actual allocation
+    /// // may never be less than requested length.
+    /// assert_eq!(memory.len(),0x2000);
+    ///```
+    /// 0-sized allocations will always fail.
+    /// ```should_panic
+    /// # use pages::*;
+    /// let memory:Pages<AllowRead,AllowWrite,DenyExec> = Pages::new(0);
+    ///```
     #[must_use]
     pub fn new(length: usize) -> Self {
         Self::new_native(length)
@@ -189,7 +235,7 @@ impl<R: ReadPremisionMarker, W: WritePremisionMarker, E: ExecPremisionMarker> Pa
     #[cfg(target_family = "windows")]
     fn new_native(length: usize) -> Self {
         assert_ne!(length, 0, "0 - sized allcations are not allowed!");
-        let len = (length / PAGE_SIZE + 1) * PAGE_SIZE;
+        let len = next_page_boundary(length);
         let ptr =
             unsafe { VirtualAlloc(std::ptr::null_mut(), length, MEM_COMMIT, Self::flProtect()) }
                 .cast::<u8>();
@@ -208,7 +254,7 @@ impl<R: ReadPremisionMarker, W: WritePremisionMarker, E: ExecPremisionMarker> Pa
     #[cfg(target_family = "unix")]
     fn new_native(length: usize) -> Self {
         assert_ne!(length, 0, "0 - sized allcations are not allowed!");
-        let len = (length / PAGE_SIZE + 1) * PAGE_SIZE;
+        let len = next_page_boundary(length);
         let prot_mask = Self::bitmask();
         let ptr = unsafe {
             mmap(
@@ -312,16 +358,66 @@ impl<R: ReadPremisionMarker, W: WritePremisionMarker> Pages<R, W, AllowExec> {
     /// Returns a pointer to executable code at *offset*. Works similary to getting a pointer using [`Self::get_ptr`] or
     /// [`Self::get_ptr_mut`] but ensures that execute permission is set to allow(if not this function is unavailable), and
     /// clearly conveys the intent of programmer. Returned pointer may not be read from/written into, can be only cast as a function pointer.
+    /// # Panics
+    /// Will panic if offset larger than length.
+    /// # Examples
+    /// Getting a pointer with offset smaller than length of pages is OK.
+    ///```
+    /// # use pages::*;
+    /// let memory:Pages<DenyRead,DenyWrite,AllowExec> = Pages::new(0x1000);
+    /// let ptr = memory.get_fn_ptr(0);
+    /// let ptr2 = memory.get_fn_ptr(2);
+    ///```
+    /// Getting a pointer with offset greater than length of Pages causes a panic.
+    ///```should_panic
+    /// # use pages::*;
+    /// let memory:Pages<DenyRead,DenyWrite,AllowExec> = Pages::new(0x1000);
+    /// let ptr = memory.get_fn_ptr(0x1000);
+    /// let ptr = memory.get_fn_ptr(0x1001);
+    ///```
+    /// Defencing a pointer acquired from calling `get_fn_ptr` on `Pages` with DenyRead is an UB and may cause a segfault on some systems.
+    ///```should_panic
+    /// # use pages::*;
+    /// let memory:Pages<DenyRead,DenyWrite,AllowExec> = Pages::new(0x1000);
+    /// let ptr = memory.get_fn_ptr(0x1);
+    /// let some_data:u8 = unsafe{*(ptr as *const u8)};
+    /// # panic!("This may or may not be illegal");
+    ///```
     #[must_use] 
-    pub fn get_fn_ptr(&self, offset: usize) -> *const u8 {
+    pub fn get_fn_ptr(&self, offset: usize) -> *const () {
         unsafe { std::ptr::addr_of!(std::slice::from_raw_parts(self.ptr, self.len)[offset]).cast() }
     }
-    /// Gets a pointer to function at offset in [`Pages`].
+    /// Gets a pointer to function at offset in [`Pages`]. Function must be an `extern "C" fn`.
     /// # Safety
     /// The bytes at offset must represent native instructions creating a function with a matching signature to function pointer
     /// type  F.
     /// # Panics
     /// Will panic if offset larger than length.
+    /// # Example
+    /// A function that just returns, and does nothing. This example is architecture specific.
+    /// ```no_run
+    /// # use pages::*; 
+    /// let mut memory:Pages<AllowRead,AllowWrite,DenyExec> = Pages::new(0x4000);
+    /// // X86_64 assembly instruction `RET`
+    /// memory[0] = 0xC3;
+    /// let memory = memory.set_protected_exec();
+    /// let nop:extern "C" fn() = unsafe{memory.get_fn(0)};
+    /// nop();
+    /// ```
+    /// A function that adds 2 numbers. It is architecture specific, and works on x86_64 linux.
+    /// ```no_run
+    /// # use pages::*; 
+    /// let mut memory:Pages<AllowRead,AllowWrite,DenyExec> = Pages::new(0x4000);
+    /// // encoded X86_64 assembly for adding 2 numbers
+    /// memory[0] = 0x48;
+    /// memory[1] = 0x8d;
+    /// memory[2] = 0x04;
+    /// memory[3] = 0x37;
+    /// memory[4] = 0xC3;
+    /// let memory = memory.set_protected_exec();
+    /// let add:extern "C" fn(u64,u64)->u64 = unsafe{memory.get_fn(0)};
+    /// assert_eq!(add(43,34),77);
+    /// ```
     #[must_use]
     pub unsafe fn get_fn<F: ExternFnPtr>(&self, offset: usize) -> F
     where
@@ -334,57 +430,78 @@ impl<R: ReadPremisionMarker, W: WritePremisionMarker> Pages<R, W, AllowExec> {
     }
 }
 impl<R: ReadPremisionMarker, W: WritePremisionMarker> Pages<R, W, AllowExec> {
+    /// Sets the permission on [`Pages`] to [`DenyExec`], forbidding execution.
     #[must_use]
     pub fn deny_exec(self) -> Pages<R, W, DenyExec> {
         self.into_prot()
     }
 }
 impl<R: ReadPremisionMarker, W: WritePremisionMarker> Pages<R, W, DenyExec> {
+    /// Sets the permission on [`Pages`] to [`AllowExec`], allowing execution.
+    /// # Safety
+    /// This should **NEVER** be set if not needed, because if used improperly, it may lead to Arbitrary Code Execution 
+    /// exploits. Use *only* if you know what you are doing. [`Self::set_protected_exec`] is a safer alternative, that prevents 
+    /// most ways an ACE exploit could occur.
     #[must_use]
     pub fn allow_exec(self) -> Pages<R, W, AllowExec> {
         self.into_prot()
     }
+    /// Sets the permission on [`Pages`] to [`AllowExec`] and [`DenyWrite`] to prevent changing of instructions inside      
+    /// [`Pages`]. To re-enable writes, use [`Self::allow_write_no_exec`] to ensure both [`AllowExec`] and [`AllowExec`] are 
+    /// never set at the same time.
     #[must_use]
     pub fn set_protected_exec(self) -> Pages<R, DenyWrite, AllowExec> {
         self.into_prot()
     }
 }
 impl<R: ReadPremisionMarker, E: ExecPremisionMarker> Pages<R, DenyWrite, E> {
+    /// Allows writing to this page. If dealing with executable pages(`AllowExecute`) use [`Self::allow_write_no_exec`] for additional safety.
     #[must_use]
     pub fn allow_write(self) -> Pages<R, AllowWrite, E> {
         self.into_prot()
     }
     #[must_use]
+    /// Sets the [`AllowExec`], while ensuring that the [`DenyExec`] is set, to prevent potential mistakes. 
+    /// Preferred over [`Self::allow_write`] if dealing with executable pages, otherwise just use [`Self::allow_write`]. 
     pub fn allow_write_no_exec(self) -> Pages<R, AllowWrite, DenyExec> {
         self.into_prot()
     }
 }
 impl<R: ReadPremisionMarker, E: ExecPremisionMarker> Pages<R, AllowWrite, E> {
+    /// Sets the [`DenyWrite`], making data inside this [`Pages`] immutable.
     #[must_use]
     pub fn deny_write(self) -> Pages<R, DenyWrite, E> {
         self.into_prot()
     }
 }
 impl<W: WritePremisionMarker, E: ExecPremisionMarker> Pages<DenyRead, W, E> {
+    /// Sets the [`AllowWrite`], making data inside this [`Pages`] mutable.
     #[must_use]
     pub fn allow_read(self) -> Pages<AllowRead, W, E> {
         self.into_prot()
     }
 }
 impl<W: WritePremisionMarker, E: ExecPremisionMarker> Pages<AllowRead, W, E> {
+    /// Sets the [`DenyRead`], making data inside page unreadable.
     #[must_use]
     pub fn deny_read(self) -> Pages<DenyRead, W, E> {
         self.into_prot()
     }
 }
 impl<W: WritePremisionMarker, E: ExecPremisionMarker> Pages<AllowRead, W, E> {
+    /// Sets the [`AllowRead`], making data inside page readable. 
+    /// # Panics
+    /// Panics if offset larger than length of [`Pages`].
     #[must_use]
-    pub fn get_ptr(&self, offset: usize) -> *const u8 {
+    pub unsafe fn get_ptr(&self, offset: usize) -> *const u8 {
         std::ptr::addr_of!(self[offset])
     }
 }
 impl<R: ReadPremisionMarker, E: ExecPremisionMarker> Pages<R, AllowWrite, E> {
-    pub fn get_ptr_mut(&mut self, offset: usize) -> *mut u8 {
+    /// Gets a pointer to data inside page at `offset`.
+    /// # Safety
+    /// This pointer may be only written into, and while reading data from it may work on some systems, it is an UB which may cause crashes.
+    pub unsafe fn get_ptr_mut(&mut self, offset: usize) -> *mut u8 {
         unsafe {
             std::ptr::addr_of_mut!(std::slice::from_raw_parts_mut(self.ptr, self.len)[offset])
         }
