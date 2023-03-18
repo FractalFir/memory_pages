@@ -1,61 +1,80 @@
 use std::borrow::{Borrow, BorrowMut};
+#[cfg(target_family = "windows")]
+use winapi::um::memoryapi::*;
+#[cfg(target_family = "windows")]
+use winapi::um::winnt::{MEM_COMMIT, PAGE_EXECUTE, PAGE_NOACCESS, PAGE_READONLY, PAGE_READWRITE, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE,MEM_RELEASE};
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use core::fmt::Pointer;
-const PAGES_SIZE: usize = 0x1000;
+const PAGE_SIZE: usize = 0x1000;
 #[cfg(target_family = "unix")]
 const MAP_ANYNOMUS: c_int = 0x20;
+#[cfg(target_family = "unix")]
 const MAP_PRIVATE: c_int = 0x2;
 #[cfg(target_family = "unix")]
 const NO_FILE: c_int = -1;
-/// Marks if a Pages can be read from.
+/// Marks if a [`Pages`] can be read from.
 pub trait ReadPremisionMarker {
     #[cfg(target_family = "unix")]
     fn bitmask() -> c_int;
+    #[cfg(target_family = "windows")]
+    fn allow_read()->bool;
 }
-/// Marks if a Pages can be written into.
+/// Marks if a [`Pages`] can be written into.
 pub trait WritePremisionMarker {
     #[cfg(target_family = "unix")]
     fn bitmask() -> c_int;
+    #[cfg(target_family = "windows")]
+    fn allow_write()->bool;
 }
-/// Marks if native CPU instructions stored inside Pages can jumped to and executed.
+/// Marks if native CPU instructions stored inside [`Pages`] can jumped to and executed.
 pub trait ExecPremisionMarker {
     #[cfg(target_family = "unix")]
     fn bitmask() -> c_int;
+    #[cfg(target_family = "windows")]
+    fn allow_exec()->bool;
 }
-/// Marks Pages as allowing to be read from.
+/// Marks [`Pages`] as allowing to be read from.
 pub struct AllowRead;
 impl ReadPremisionMarker for AllowRead {
     #[cfg(target_family = "unix")]
     fn bitmask() -> c_int {
         0x1
     }
+    #[cfg(target_family = "windows")]
+    fn allow_read()->bool{true}
 }
-/// Marks Pages as forbidding all reads(causing SIGSEGV if read attempted).
+/// Marks [`Pages`] as forbidding all reads(causing SIGSEGV if read attempted).
 pub struct DenyRead;
 impl ReadPremisionMarker for DenyRead {
     #[cfg(target_family = "unix")]
     fn bitmask() -> c_int {
         0
     }
+    #[cfg(target_family = "windows")]
+    fn allow_read()->bool{false}
 }
-/// Marks Pages as allowing to be modified.
+/// Marks [`Pages`] as allowing to be modified.
 pub struct AllowWrite;
 impl WritePremisionMarker for AllowWrite {
     #[cfg(target_family = "unix")]
     fn bitmask() -> c_int {
         0x2
     }
+    #[cfg(target_family = "windows")]
+    fn allow_write()->bool{true}
 }
-/// Marks Pages as forbidding all writes(causing SIGSEGV if write attempted).
+/// Marks [`Pages`] as forbidding all writes(causing SIGSEGV if write attempted).
 pub struct DenyWrite;
 impl WritePremisionMarker for DenyWrite {
     #[cfg(target_family = "unix")]
     fn bitmask() -> c_int {
         0
     }
+    #[cfg(target_family = "windows")]
+    fn allow_write()->bool{false}
 }
-/// Marks Pages as allowing execution.
+/// Marks [`Pages`] as allowing execution.
 /// **WARNING** do *NOT* set this permission if not necessary!
 /// # Safety
 /// Set [`AllowExec`] permission  only if you can be sure that:
@@ -67,14 +86,18 @@ impl ExecPremisionMarker for AllowExec {
     fn bitmask() -> c_int {
         0x4
     }
+    #[cfg(target_family = "windows")]
+    fn allow_exec()->bool{true}
 }
-// Prevents data inside [`Pages`] from being executed. Do *NOT* change from this value if not 100% sure what you are doing.
+/// Prevents data inside [`Pages`] from being executed. Do *NOT* change from this value if not 100% sure what you are doing.
 pub struct DenyExec;
 impl ExecPremisionMarker for DenyExec {
     #[cfg(target_family = "unix")]
     fn bitmask() -> c_int {
         0
     }
+    #[cfg(target_family = "windows")]
+    fn allow_exec()->bool{false}
 }
 use std::ffi::{c_int, c_void};
 #[cfg(target_family = "unix")]
@@ -91,7 +114,7 @@ extern "C" {
     fn mprotect(addr: *mut c_void, len: usize, prot: c_int) -> c_int;
     fn strerror(errnum: c_int) -> *const i8;
 }
-/// A bunch of memory pages requested from the kernel, contiguously laid out in memory, with certain previsions set.
+/// A bunch of memory pages acquired directly from the kernel, contiguously laid out in memory, with certain access permissions set.
 pub struct Pages<R: ReadPremisionMarker, W: WritePremisionMarker, E: ExecPremisionMarker> {
     ptr: *mut u8,
     len: usize,
@@ -119,14 +142,58 @@ impl<R: ReadPremisionMarker, W: WritePremisionMarker, E: ExecPremisionMarker> Pa
     fn bitmask() -> c_int {
         R::bitmask() | W::bitmask() | E::bitmask()
     }
-    #[cfg(target_family = "unix")]
-    #[must_use]
+    #[cfg(target_family = "windows")]
+    fn flProtect()->u32{
+        let mask = (R::allow_read() as u8 * 0x1) | (W::allow_write() as u8 * 0x2)|(E::allow_exec() as u8 * 0x4);
+        match mask{
+            0x0=>PAGE_NOACCESS,
+            0x1=>PAGE_READONLY,
+            0x2=>PAGE_READWRITE,//On windows, it is impossible to have a write-only page, but `Pages` must have 
+            // AllowRead to be read from, so there are no issues here.
+            0x3=>PAGE_READWRITE,
+            0x4=>PAGE_EXECUTE,
+            0x5=>PAGE_EXECUTE_READ,
+            0x6=>PAGE_EXECUTE_READWRITE,//On windows, it is impossible to have a write but not read page, but `Pages` already 
+            // must have AllowRead to be read from, so there are no issues here.
+            0x7=>PAGE_EXECUTE_READWRITE,
+            0x8..=0xFF=>panic!("Invalid protection mask:{mask}"),
+        }
+    }
     /// Allocates new [`Pages`] of size at least length, rounded up to next Page boundary if necessary.
     /// # Panics
     /// Panics when a 0-sized allocation is attempted, or if kernel can't/refuses to allocate requested Pages(Should never happen).
-    pub fn new(length: usize) -> Self {
+    #[must_use]
+    pub fn new(length: usize) -> Self{
+        Self::new_native(length)
+    }
+    #[cfg(target_family = "windows")]
+    fn new_native(length: usize) -> Self {
         assert_ne!(length, 0, "0 - sized allcations are not allowed!");
-        let len = (length / PAGES_SIZE + 1) * PAGES_SIZE;
+        let len = (length / PAGE_SIZE + 1) * PAGE_SIZE;
+        let ptr = unsafe {
+            VirtualAlloc(
+                std::ptr::null_mut(),
+                length,
+                MEM_COMMIT,
+                Self::flProtect()
+            )
+        }.cast::<u8>();
+        if ptr as usize == 0{
+            let err = unsafe{winapi::um::errhandlingapi::GetLastError()};
+            panic!("Allocation using VirtualAlloc failed with error code:{err}!");
+        }
+        Self {
+            ptr,
+            len,
+            read: PhantomData,
+            write: PhantomData,
+            exec: PhantomData,
+        }
+    }
+    #[cfg(target_family = "unix")]
+    fn new_native(length: usize) -> Self {
+        assert_ne!(length, 0, "0 - sized allcations are not allowed!");
+        let len = (length / PAGE_SIZE + 1) * PAGE_SIZE;
         let prot_mask = Self::bitmask();
         let ptr = unsafe {
             mmap(
@@ -157,6 +224,16 @@ impl<R: ReadPremisionMarker, W: WritePremisionMarker, E: ExecPremisionMarker> Pa
         if unsafe { mprotect(self.ptr.cast::<c_void>(), self.len, mask) } != -1 && erno() != 0 {
             let err = errno_msg();
             panic!("Failed to change memory protection mode:'{err}'!");
+        }
+    }
+    #[cfg(target_family = "windows")]
+    fn set_prot(&mut self) {
+        let mut _old:u32 = 0;
+        let res = unsafe{
+        winapi::um::memoryapi::VirtualProtect(self.ptr.cast::<winapi::ctypes::c_void>(), self.len, Self::flProtect(), &mut _old as *mut _)};
+        if res == 0{
+            let err = unsafe{winapi::um::errhandlingapi::GetLastError()};
+            panic!("Changing memory protection using using VirtualProtect failed with error code:{err}!");
         }
     }
     fn into_prot<TR: ReadPremisionMarker, TW: WritePremisionMarker, TE: ExecPremisionMarker>(
@@ -305,6 +382,14 @@ impl<R: ReadPremisionMarker, W: WritePremisionMarker, E: ExecPremisionMarker> Dr
                 panic!("Unampping memory Pages failed. Reason:{err}");
             }
         }
+        #[cfg(target_family = "windows")]
+        unsafe {
+            let res = VirtualFree(self.ptr.cast::<winapi::ctypes::c_void>(), 0,MEM_RELEASE);
+            if res == 0{
+                let err = winapi::um::errhandlingapi::GetLastError();
+                panic!("Allocation using VirtualFree failed with error code:{err}!");
+            }
+        }
     }
 }
 #[cfg(test)]
@@ -354,11 +439,21 @@ mod test {
         //NOP
         Pages[0] = 0xC3;
         //Add 2 u64s
-        Pages[1] = 0x48;
-        Pages[2] = 0x8d;
-        Pages[3] = 0x04;
-        Pages[4] = 0x37;
-        Pages[5] = 0xC3;
+        #[cfg(target_family = "unix")]
+        {
+            Pages[1] = 0x48;
+            Pages[2] = 0x8d;
+            Pages[3] = 0x04;
+            Pages[4] = 0x37;
+            Pages[5] = 0xC3;
+        }
+        #[cfg(target_family = "windows")]
+        {
+            Pages[1] = 0x8d;
+            Pages[2] = 0x04;
+            Pages[3] = 0x11;
+            Pages[4] = 0xC3;
+        }
         let nop: fn() = unsafe{Pages.get_fn(0)};
         nop();
         let add: fn(u64, u64) -> u64 = unsafe{Pages.get_fn(1)};
@@ -369,18 +464,32 @@ mod test {
         }
     }
     #[test]
+    fn test_allow_read() {
+        
+    }
+    #[test]
     #[cfg(target_arch = "x86_64")]
     fn test_allow_exec() {
         let mut Pages: Pages<AllowRead, AllowWrite, DenyExec> = Pages::new(256);
         //NOP
         Pages[0] = 0xC3;
         //Add 2 u64s
-        Pages[1] = 0x48;
-        Pages[2] = 0x8d;
-        Pages[3] = 0x04;
-        Pages[4] = 0x37;
-        Pages[5] = 0xC3;
-        let Pages = Pages.allow_exec();
+        #[cfg(target_family = "unix")]
+        {
+            Pages[1] = 0x48;
+            Pages[2] = 0x8d;
+            Pages[3] = 0x04;
+            Pages[4] = 0x37;
+            Pages[5] = 0xC3;
+        }
+        #[cfg(target_family = "windows")]
+        {
+            Pages[1] = 0x8d;
+            Pages[2] = 0x04;
+            Pages[3] = 0x11;
+            Pages[4] = 0xC3;
+        }
+        let Pages = Pages.allow_exec().deny_write();
         let nop: fn(()) = unsafe{Pages.get_fn(0)};
         nop(());
         let add: fn(u64, u64) -> u64 = unsafe{Pages.get_fn(1)};
