@@ -6,7 +6,11 @@ use extern_fn_ptr::ExternFnPtr;
 use std::borrow::{Borrow, BorrowMut};
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
-// TODO: maybe make allow/deny for all `Pages`?
+/// `pages` is a small crate providing a cross-platform API to request pages from kernel with certain permission modes 
+/// set(read,write,execute). It simplifies writing JIT compilers, by proving a way to allocate executable memory and change 
+/// memory protection on almost any system(Windows and most POSIX-compliant systems(Linux,Redox,FreeBSD,MacOS,most other BSDs)). 
+/// But not only JIT compilers may benefit from this crate. While slow for small allocations, it is faster for allocating large
+/// chunks of memory.
 #[cfg(target_family = "windows")]
 use winapi::um::memoryapi::*;
 #[cfg(target_family = "windows")]
@@ -14,6 +18,7 @@ use winapi::um::winnt::{
     MEM_COMMIT, MEM_RELEASE, PAGE_EXECUTE, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE,
     PAGE_NOACCESS, PAGE_READONLY, PAGE_READWRITE,
 };
+
 const fn next_page_boundary(size:usize)->usize{
     ((size + PAGE_SIZE - 1)/PAGE_SIZE)*PAGE_SIZE
 }
@@ -354,6 +359,74 @@ impl<E: ExecPremisionMarker> std::ops::IndexMut<usize> for Pages<AllowRead, Allo
         unsafe { &mut std::slice::from_raw_parts_mut(self.ptr, self.len)[index] }
     }
 }
+impl<R: ReadPremisionMarker,W: WritePremisionMarker, E: ExecPremisionMarker> Pages<R, W, E> {
+    /// Sets the [`AllowWrite`], making data inside this [`Pages`] mutable.
+    #[must_use]
+    pub fn allow_read(self) -> Pages<AllowRead, W, E> {
+        self.into_prot()
+    }
+    /// Sets the [`DenyRead`], making data inside page unreadable.
+    #[must_use]
+    pub fn deny_read(self) -> Pages<DenyRead, W, E> {
+        self.into_prot()
+    }
+    /// Allows writing to this page. If dealing with executable pages(`AllowExecute`) use [`Self::allow_write_no_exec`] for additional safety.
+    #[must_use]
+    pub fn allow_write(self) -> Pages<R, AllowWrite, E> {
+        self.into_prot()
+    }
+    /// Sets the [`DenyWrite`], making data inside this [`Pages`] immutable.
+    #[must_use]
+    pub fn deny_write(self) -> Pages<R, DenyWrite, E> {
+        self.into_prot()
+    }
+    #[must_use]
+    /// Sets the [`AllowExec`], while ensuring that the [`DenyExec`] is set, to prevent potential mistakes. 
+    /// Preferred over [`Self::allow_write`] if dealing with executable pages, otherwise just use [`Self::allow_write`]. 
+    pub fn allow_write_no_exec(self) -> Pages<R, AllowWrite, DenyExec> {
+        self.into_prot()
+    }
+    /// Sets the permission on [`Pages`] to [`AllowExec`], allowing execution.
+    /// # Safety
+    /// This should **NEVER** be set if not needed, because if used improperly, it may lead to Arbitrary Code Execution 
+    /// exploits. Use *only* if you know what you are doing. [`Self::set_protected_exec`] is a safer alternative, that prevents 
+    /// most ways an ACE exploit could occur.
+    #[must_use]
+    pub fn allow_exec(self) -> Pages<R, W, AllowExec> {
+        self.into_prot()
+    }
+    /// Sets the permission on [`Pages`] to [`AllowExec`] and [`DenyWrite`] to prevent changing of instructions inside      
+    /// [`Pages`]. To re-enable writes, use [`Self::allow_write_no_exec`] to ensure both [`AllowExec`] and [`AllowExec`] are 
+    /// never set at the same time.
+    #[must_use]
+    pub fn set_protected_exec(self) -> Pages<R, DenyWrite, AllowExec> {
+        self.into_prot()
+    }
+    /// Sets the permission on [`Pages`] to [`DenyExec`], forbidding execution.
+    #[must_use]
+    pub fn deny_exec(self) -> Pages<R, W, DenyExec> {
+        self.into_prot()
+    }
+}
+impl<W: WritePremisionMarker, E: ExecPremisionMarker> Pages<AllowRead, W, E> {
+    /// Sets the [`AllowRead`], making data inside page readable. 
+    /// # Panics
+    /// Panics if offset larger than length of [`Pages`].
+    #[must_use]
+    pub unsafe fn get_ptr(&self, offset: usize) -> *const u8 {
+        std::ptr::addr_of!(self[offset])
+    }
+}
+impl<R: ReadPremisionMarker, E: ExecPremisionMarker> Pages<R, AllowWrite, E> {
+    /// Gets a pointer to data inside page at `offset`.
+    /// # Safety
+    /// This pointer may be only written into, and while reading data from it may work on some systems, it is an UB which may cause crashes.
+    pub unsafe fn get_ptr_mut(&mut self, offset: usize) -> *mut u8 {
+        unsafe {
+            std::ptr::addr_of_mut!(std::slice::from_raw_parts_mut(self.ptr, self.len)[offset])
+        }
+    }
+}
 impl<R: ReadPremisionMarker, W: WritePremisionMarker> Pages<R, W, AllowExec> {
     /// Returns a pointer to executable code at *offset*. Works similary to getting a pointer using [`Self::get_ptr`] or
     /// [`Self::get_ptr_mut`] but ensures that execute permission is set to allow(if not this function is unavailable), and
@@ -427,84 +500,6 @@ impl<R: ReadPremisionMarker, W: WritePremisionMarker> Pages<R, W, AllowExec> {
         let f:F = *(std::ptr::addr_of!(fn_ptr).cast::<F>());
         let _ = fn_ptr;
         f
-    }
-}
-impl<R: ReadPremisionMarker, W: WritePremisionMarker> Pages<R, W, AllowExec> {
-    /// Sets the permission on [`Pages`] to [`DenyExec`], forbidding execution.
-    #[must_use]
-    pub fn deny_exec(self) -> Pages<R, W, DenyExec> {
-        self.into_prot()
-    }
-}
-impl<R: ReadPremisionMarker, W: WritePremisionMarker> Pages<R, W, DenyExec> {
-    /// Sets the permission on [`Pages`] to [`AllowExec`], allowing execution.
-    /// # Safety
-    /// This should **NEVER** be set if not needed, because if used improperly, it may lead to Arbitrary Code Execution 
-    /// exploits. Use *only* if you know what you are doing. [`Self::set_protected_exec`] is a safer alternative, that prevents 
-    /// most ways an ACE exploit could occur.
-    #[must_use]
-    pub fn allow_exec(self) -> Pages<R, W, AllowExec> {
-        self.into_prot()
-    }
-    /// Sets the permission on [`Pages`] to [`AllowExec`] and [`DenyWrite`] to prevent changing of instructions inside      
-    /// [`Pages`]. To re-enable writes, use [`Self::allow_write_no_exec`] to ensure both [`AllowExec`] and [`AllowExec`] are 
-    /// never set at the same time.
-    #[must_use]
-    pub fn set_protected_exec(self) -> Pages<R, DenyWrite, AllowExec> {
-        self.into_prot()
-    }
-}
-impl<R: ReadPremisionMarker, E: ExecPremisionMarker> Pages<R, DenyWrite, E> {
-    /// Allows writing to this page. If dealing with executable pages(`AllowExecute`) use [`Self::allow_write_no_exec`] for additional safety.
-    #[must_use]
-    pub fn allow_write(self) -> Pages<R, AllowWrite, E> {
-        self.into_prot()
-    }
-    #[must_use]
-    /// Sets the [`AllowExec`], while ensuring that the [`DenyExec`] is set, to prevent potential mistakes. 
-    /// Preferred over [`Self::allow_write`] if dealing with executable pages, otherwise just use [`Self::allow_write`]. 
-    pub fn allow_write_no_exec(self) -> Pages<R, AllowWrite, DenyExec> {
-        self.into_prot()
-    }
-}
-impl<R: ReadPremisionMarker, E: ExecPremisionMarker> Pages<R, AllowWrite, E> {
-    /// Sets the [`DenyWrite`], making data inside this [`Pages`] immutable.
-    #[must_use]
-    pub fn deny_write(self) -> Pages<R, DenyWrite, E> {
-        self.into_prot()
-    }
-}
-impl<W: WritePremisionMarker, E: ExecPremisionMarker> Pages<DenyRead, W, E> {
-    /// Sets the [`AllowWrite`], making data inside this [`Pages`] mutable.
-    #[must_use]
-    pub fn allow_read(self) -> Pages<AllowRead, W, E> {
-        self.into_prot()
-    }
-}
-impl<W: WritePremisionMarker, E: ExecPremisionMarker> Pages<AllowRead, W, E> {
-    /// Sets the [`DenyRead`], making data inside page unreadable.
-    #[must_use]
-    pub fn deny_read(self) -> Pages<DenyRead, W, E> {
-        self.into_prot()
-    }
-}
-impl<W: WritePremisionMarker, E: ExecPremisionMarker> Pages<AllowRead, W, E> {
-    /// Sets the [`AllowRead`], making data inside page readable. 
-    /// # Panics
-    /// Panics if offset larger than length of [`Pages`].
-    #[must_use]
-    pub unsafe fn get_ptr(&self, offset: usize) -> *const u8 {
-        std::ptr::addr_of!(self[offset])
-    }
-}
-impl<R: ReadPremisionMarker, E: ExecPremisionMarker> Pages<R, AllowWrite, E> {
-    /// Gets a pointer to data inside page at `offset`.
-    /// # Safety
-    /// This pointer may be only written into, and while reading data from it may work on some systems, it is an UB which may cause crashes.
-    pub unsafe fn get_ptr_mut(&mut self, offset: usize) -> *mut u8 {
-        unsafe {
-            std::ptr::addr_of_mut!(std::slice::from_raw_parts_mut(self.ptr, self.len)[offset])
-        }
     }
 }
 impl<R: ReadPremisionMarker, W: WritePremisionMarker, E: ExecPremisionMarker> Drop

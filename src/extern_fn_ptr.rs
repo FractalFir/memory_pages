@@ -1,7 +1,17 @@
-pub trait ExternFnPtr {}
-impl<Ret> ExternFnPtr for extern "C" fn() -> Ret {}
-impl<Arg1, Ret> ExternFnPtr for extern "C" fn(Arg1) -> Ret {}
-impl<Arg1, Arg2, Ret> ExternFnPtr for extern "C" fn(Arg1, Arg2) -> Ret {}
+pub trait ExternFnPtr {
+    type Args;
+}
+impl<Ret> ExternFnPtr for extern "C" fn() -> Ret {
+    type Args = ();
+}
+impl<Arg1, Ret> ExternFnPtr for extern "C" fn(Arg1) -> Ret {
+    type Args = (Arg1,);
+}
+
+impl<Arg1, Arg2, Ret> ExternFnPtr for extern "C" fn(Arg1, Arg2) -> Ret {
+    type Args = (Arg1,Arg2);
+}
+/*
 impl<Arg1, Arg2, Arg3, Ret> ExternFnPtr for extern "C" fn(Arg1, Arg2, Arg3) -> Ret {}
 impl<Arg1, Arg2, Arg3, Arg4, Ret> ExternFnPtr for extern "C" fn(Arg1, Arg2, Arg3, Arg4) -> Ret {}
 impl<Arg1, Arg2, Arg3, Arg4, Arg5, Ret> ExternFnPtr
@@ -178,4 +188,4 @@ impl<
         Arg16,
     ) -> Ret
 {
-}
+}*/
