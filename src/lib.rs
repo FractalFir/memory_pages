@@ -1,8 +1,12 @@
 //! `pages` is a small crate providing a cross-platform API to request pages from kernel with certain permission modes 
-//! set(read,write,execute). It simplifies writing JIT compilers, by proving a way to allocate executable memory and change 
-//! memory protection on almost any system(Windows and most POSIX-compliant systems(Linux,Redox,FreeBSD,MacOS,most other BSDs)). 
-//! But not only JIT compilers may benefit from this crate. While slow for small allocations, it is faster for allocating large
-//! chunks of memory.
+//! set(read,write,execute). It provides an very safe API to aid in many use cases, mainly:
+//! 1. Speeds up operating on large data sets: [`PagedVec`] provides speed advantages over standard [`Vec`] for large data 
+//! types.
+//! 2. Simplifies dealing with page permissions and allows for additional levels of safety: Pages with [`DennyWrite`] cannot be 
+//! written into without their permissions being changed, which allows for certain kinds of bugs to cause segfaults insted of overwriting data. 
+//! 3. Simplifies JITs - while dealing with memory pages is simple compared to difficulty of the task, which is writing a 
+//! Just-In-Time compiler, this crate abstracts the platform specific differences away and adds additional measures to prevent 
+//! some security issues, allowing you to focus on writing the compiler itself, without worrying about those low-level details.
 #![warn(missing_docs)]
 #![warn(rustdoc::missing_doc_code_examples)]
 mod extern_fn_ptr;
@@ -18,16 +22,34 @@ use winapi::um::winnt::{
     MEM_COMMIT, MEM_RELEASE, PAGE_EXECUTE, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE,
     PAGE_NOACCESS, PAGE_READONLY, PAGE_READWRITE,
 };
-/// A [`Vec`]-like type alloctaed using system's pages. For big lengths a faster to allocate/deallocate than a normal [`Vec`], but currently does not support reallocation. 
+/// A [`Vec`]-like type located in memory pages acquired directly from the kernel. For big lengths a faster to 
+/// allocate/deallocate than a normal [`Vec`], but considerably slower for small sizes. Intended to be used for very large data 
+/// sets, with a rough estimate of capacity known ahead of time.
+/// # Advantages: 
+/// 1. 2-3x times faster than default allocator for big vec sizes (over ~20 MB).
+/// 2. memory is released directly to the kernel as soon as [`PagedVec`] is dropped, which may not always be the case for 
+/// standard allocator, leading to decreased memory footprint.
+/// 3. More conservative growth. Since [`PagedVec`] is intended for very large sizes, it is considerably more conservative with 
+/// allocating memory(1.5x previous cap instead of 2x for standard [`Vec`].
+/// # Disadvantages
+/// 1. Slower for small data sets
+/// 2. Can't be turned into a [`Box<[T]>`]
 pub struct PagedVec<T:Sized>{
     data:Pages<AllowRead,AllowWrite,DenyExec>,
     len:usize,
     pd:PhantomData<T>,
 } 
 impl<T:Sized> PagedVec<T>{
-    /// Creates a new [`PagedVec`]
-    pub fn new(cap:usize)->Self{
-        let bytes_min = (cap*std::mem::size_of::<T>()).max(0x1000);
+    /// Creates a new [`PagedVec`] with `capacity`.
+    /// # Examples
+    /// ``` 
+    /// # use pages::*;
+    /// // capacity must be specified!
+    /// let mut vec = PagedVec::new(0x1000);
+    /// vec.push(0.0);
+    /// ```
+    pub fn new(capacity:usize)->Self{
+        let bytes_min = (capacity*std::mem::size_of::<T>()).max(0x1000);
         let data = Pages::new(bytes_min);
         Self{data,len:0,pd:PhantomData}
     }
