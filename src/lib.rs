@@ -1,3 +1,8 @@
+//! `pages` is a small crate providing a cross-platform API to request pages from kernel with certain permission modes 
+//! set(read,write,execute). It simplifies writing JIT compilers, by proving a way to allocate executable memory and change 
+//! memory protection on almost any system(Windows and most POSIX-compliant systems(Linux,Redox,FreeBSD,MacOS,most other BSDs)). 
+//! But not only JIT compilers may benefit from this crate. While slow for small allocations, it is faster for allocating large
+//! chunks of memory.
 #![warn(missing_docs)]
 #![warn(rustdoc::missing_doc_code_examples)]
 mod extern_fn_ptr;
@@ -6,11 +11,6 @@ use extern_fn_ptr::ExternFnPtr;
 use std::borrow::{Borrow, BorrowMut};
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
-/// `pages` is a small crate providing a cross-platform API to request pages from kernel with certain permission modes 
-/// set(read,write,execute). It simplifies writing JIT compilers, by proving a way to allocate executable memory and change 
-/// memory protection on almost any system(Windows and most POSIX-compliant systems(Linux,Redox,FreeBSD,MacOS,most other BSDs)). 
-/// But not only JIT compilers may benefit from this crate. While slow for small allocations, it is faster for allocating large
-/// chunks of memory.
 #[cfg(target_family = "windows")]
 use winapi::um::memoryapi::*;
 #[cfg(target_family = "windows")]
@@ -18,7 +18,146 @@ use winapi::um::winnt::{
     MEM_COMMIT, MEM_RELEASE, PAGE_EXECUTE, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE,
     PAGE_NOACCESS, PAGE_READONLY, PAGE_READWRITE,
 };
+/// A [`Vec`]-like type alloctaed using system's pages. For big lengths a faster to allocate/deallocate than a normal [`Vec`], but currently does not support reallocation. 
+pub struct PagedVec<T:Sized>{
+    data:Pages<AllowRead,AllowWrite,DenyExec>,
+    len:usize,
+    pd:PhantomData<T>,
+} 
+impl<T:Sized> PagedVec<T>{
+    /// Creates a new [`PagedVec`]
+    pub fn new(cap:usize)->Self{
+        let bytes_min = (cap*std::mem::size_of::<T>()).max(0x1000);
+        let data = Pages::new(bytes_min);
+        Self{data,len:0,pd:PhantomData}
+    }
+    /// Pushes `t` into `self` if under capacity, else returns `t`.
+    pub fn push_within_capacity(&mut self,t:T)->Result<(),T>{
+        if self.len*std::mem::size_of::<T>() < self.data.len(){
+            let slice = unsafe{
+            std::slice::from_raw_parts_mut(self.data.get_ptr_mut(0).cast::<T>(),self.len + 1)
+            };
+            slice[self.len] = t;
+            self.len += 1;
+            Ok(())
+        }
+        else{
+            Err(t)
+        }
+    }
+    fn get_next_cap(cap:usize)->usize{
+       (cap + cap/2).max(0x1000)
+    }
+    fn resize(&mut self,next_cap:usize){
+        let bytes_cap = next_cap*std::mem::size_of::<T>();
+        let mut data = Pages::new(bytes_cap);
+        let cpy_len = self.len() * std::mem::size_of::<T>();
+        data.split_at_mut(cpy_len).0.copy_from_slice(self.data.split_at_mut(cpy_len).0);
+        self.data = data;
+    }
+    /// Reserves capacity for at least additional more elements to be inserted in the given [`PagedVec<T>`]. The collection may 
+    /// reserve more space to speculatively avoid frequent reallocations. After calling reserve, capacity will be greater than 
+    /// or equal to self.len() + additional. Does nothing if capacity is already sufficient.
+    pub fn reserve(&mut self,additional:usize){
+        if self.len() + additional < self.capacity(){
+            return;
+        }
+        self.resize(Self::get_next_cap(self.len() + additional));
+    }
+    /// Reserves the minimum capacity for at least additional more elements to be inserted in the given [`PagedVec<T>`]. Unlike
+    /// reserve, this will not deliberately over-allocate to speculatively avoid frequent allocations. After calling 
+    /// [`Self::reserve_exact`], capacity will be greater than or equal to self.len() + additional. Does nothing if the capacity is 
+    /// already sufficient.
+    ///
+    ///
+    /// Note that the allocator may give the collection more space than it requests. Therefore, capacity can not be relied upon 
+    /// to be precisely minimal. Using reserve before [`Self::push`] is preferred over using just [`Self::push`], because 
+    /// reallocation's of [`PagedVec`] are slow.
+    pub fn reserve_exact(&mut self,additional:usize){
+        if self.len() + additional < self.capacity(){
+            return;
+        }
+        self.resize(self.len() + additional);
+    }
+    /// Removes and returns the element at position `index` within the vector,
+    /// shifting all elements after it to the left.
+    ///
+    /// Note: Because this shifts over the remaining elements, it has a
+    /// worst-case performance of *O*(*n*). 
+    pub fn remove(&mut self,index:usize)->T{
+        // Taken form std lib.
+        let ret;
+        unsafe{
+                // the place we are taking from.
+                let ptr = self.as_mut_ptr().add(index);
+                // copy it out, unsafely having a copy of the value on
+                // the stack and in the vector at the same time.
+                ret = std::ptr::read(ptr);
 
+                // Shift everything down to fill in that spot.
+                std::ptr::copy(ptr.add(1), ptr, self.len - index - 1);
+        }
+        self.len -= 1;
+        ret
+    }
+    /// Pushes `t` into `self` and reallocates if over capacity. Generally unadvised, because reallocation's of [`PagedVec`]-s 
+    /// are very slow. Setting sufficient capacity and using [`Self::push_within_capacity`] is generally encouraged.  
+    pub fn push(&mut self,t:T){
+        if let Err(t) = self.push_within_capacity(t){
+            self.resize(Self::get_next_cap(self.capacity()));
+            match self.push_within_capacity(t){
+                Ok(_)=>(),
+                Err(_)=>panic!("PagedVec expanded, but still had not enough space for a push!"),
+            }
+        }
+    }
+    /// Gets the capacity of `self`.
+    #[must_use]
+    pub fn capacity(&self)->usize{
+        self.data.len()/std::mem::size_of::<T>()
+    }
+    /// Pops the last element from self
+    pub fn pop(&mut self)->T{
+        use std::mem::MaybeUninit;
+        let last_index = self.len;
+        // This is safe, because res is swapped into the page and can only be overwritten, never read from.
+        #[allow(clippy::uninit_assumed_init)]
+        let mut res = unsafe { MaybeUninit::uninit().assume_init() };
+        std::mem::swap(&mut self[last_index],&mut res);
+        self.len -= 1;
+        res
+    }
+    /// Clears the vector, removing all values.
+    pub fn clear(&mut self){
+        self.drop_all();
+        self.len = 0;
+    }
+    fn drop_all(&mut self){
+        use std::mem::MaybeUninit;
+        for i in 0..self.len(){
+            // This is safe, because tmp is swapped into the page, and then it is effectively forgotten.
+            #[allow(clippy::uninit_assumed_init)]
+            let mut tmp = unsafe { MaybeUninit::uninit().assume_init() };
+            std::mem::swap(&mut self[i], &mut tmp);
+        }
+    }
+}
+impl<T:Sized> Drop for PagedVec<T>{
+    fn drop(&mut self){
+        self.drop_all();
+    }
+}
+impl<T:Sized> Deref for PagedVec<T>{
+    type Target = [T]; 
+    fn deref(&self)->&[T]{
+        unsafe{std::slice::from_raw_parts(self.data.get_ptr(0).cast::<T>(),self.len)}
+    }
+}
+impl<T:Sized> DerefMut for PagedVec<T>{
+    fn deref_mut(&mut self)->&mut [T]{
+        unsafe{std::slice::from_raw_parts_mut(self.data.get_ptr_mut(0).cast::<T>(),self.len)}
+    }
+}
 const fn next_page_boundary(size:usize)->usize{
     ((size + PAGE_SIZE - 1)/PAGE_SIZE)*PAGE_SIZE
 }
@@ -50,7 +189,6 @@ pub trait ReadPremisionMarker {
     #[cfg(all(target_family = "unix"))]
     #[doc(hidden)]
     fn bitmask() -> c_int;
-    #[cfg(target_family = "windows")]
     #[doc(hidden)]
     fn allow_read() -> bool;
 }
@@ -59,7 +197,6 @@ pub trait WritePremisionMarker {
     #[cfg(target_family = "unix")]
     #[doc(hidden)]
     fn bitmask() -> c_int;
-    #[cfg(target_family = "windows")]
     #[doc(hidden)]
     fn allow_write() -> bool;
 }
@@ -68,7 +205,6 @@ pub trait ExecPremisionMarker {
     #[cfg(target_family = "unix")]
     #[doc(hidden)]
     fn bitmask() -> c_int;
-    #[cfg(target_family = "windows")]
     #[doc(hidden)]
     fn allow_exec() -> bool;
 }
@@ -79,7 +215,6 @@ impl ReadPremisionMarker for AllowRead {
     fn bitmask() -> c_int {
         0x1
     }
-    #[cfg(target_family = "windows")]
     fn allow_read() -> bool {
         true
     }
@@ -91,7 +226,6 @@ impl ReadPremisionMarker for DenyRead {
     fn bitmask() -> c_int {
         0
     }
-    #[cfg(target_family = "windows")]
     fn allow_read() -> bool {
         false
     }
@@ -103,7 +237,6 @@ impl WritePremisionMarker for AllowWrite {
     fn bitmask() -> c_int {
         0x2
     }
-    #[cfg(target_family = "windows")]
     fn allow_write() -> bool {
         true
     }
@@ -115,7 +248,6 @@ impl WritePremisionMarker for DenyWrite {
     fn bitmask() -> c_int {
         0
     }
-    #[cfg(target_family = "windows")]
     fn allow_write() -> bool {
         false
     }
@@ -132,7 +264,6 @@ impl ExecPremisionMarker for AllowExec {
     fn bitmask() -> c_int {
         0x4
     }
-    #[cfg(target_family = "windows")]
     fn allow_exec() -> bool {
         true
     }
@@ -144,7 +275,6 @@ impl ExecPremisionMarker for DenyExec {
     fn bitmask() -> c_int {
         0
     }
-    #[cfg(target_family = "windows")]
     fn allow_exec() -> bool {
         false
     }
@@ -319,6 +449,14 @@ impl<R: ReadPremisionMarker, W: WritePremisionMarker, E: ExecPremisionMarker> Pa
             exec: PhantomData,
         };
         std::mem::forget(self);
+        #[cfg(target_family = "unix")]
+        if Self::bitmask() == (Pages::<TR, TW, TE>::bitmask()){
+            return res;
+        }
+        #[cfg(target_family = "windows")]
+        if Self::flProtect() == (Pages::<TR, TW, TE>::flProtect()){
+            return res;
+        }
         res.set_prot();
         res
     }
@@ -360,10 +498,10 @@ impl<E: ExecPremisionMarker> std::ops::IndexMut<usize> for Pages<AllowRead, Allo
     }
 }
 impl<R: ReadPremisionMarker,W: WritePremisionMarker, E: ExecPremisionMarker> Pages<R, W, E> {
-    /// Sets the [`AllowWrite`], making data inside this [`Pages`] mutable.
+    /// Sets the [`AllowRead`], making data inside this [`Pages`] readable.
     #[must_use]
     pub fn allow_read(self) -> Pages<AllowRead, W, E> {
-        self.into_prot()
+            self.into_prot()
     }
     /// Sets the [`DenyRead`], making data inside page unreadable.
     #[must_use]
@@ -371,6 +509,46 @@ impl<R: ReadPremisionMarker,W: WritePremisionMarker, E: ExecPremisionMarker> Pag
         self.into_prot()
     }
     /// Allows writing to this page. If dealing with executable pages(`AllowExecute`) use [`Self::allow_write_no_exec`] for additional safety.
+    /// # Examples
+    /// Type system enforces high degree of safety!
+    /// ```compile_fail
+    ///  # use pages::*;
+    /// let mut memory:Pages<AllowRead,DenyWrite,DenyExec> = Pages::new(0x1000);
+    /// // this function is not available, if AllowWrite is not set, so this won't compile, preventing mistakes!
+    /// memory[8] = 64;
+    /// ```
+    /// Using [`Self::allow_write`] sets `AllowWrite` on type, allowing checks to run at compile time. 
+    /// ```
+    /// # use pages::*;
+    /// let memory:Pages<AllowRead,DenyWrite,DenyExec> = Pages::new(0x1000);
+    /// // .allow_write() changes the type, allowing for writes!
+    /// let mut memory:Pages<AllowRead,AllowWrite,DenyExec> = memory.allow_write();
+    /// memory[8] = 86;
+    /// ```
+    /// Type annotations are not needed
+    /// ```
+    /// # use pages::*;
+    /// let memory:Pages<AllowRead,DenyWrite,DenyExec> = Pages::new(0x1000);
+    /// // .allow_write() changes the type, allowing for writes!
+    /// let mut memory = memory.allow_write();
+    /// memory[8] = 86;
+    /// ```
+    /// Calling `allow_write` on type that already allows writes is a NOP.
+    /// ```
+    /// # use pages::*;
+    /// let memory:Pages<AllowRead,AllowWrite,DenyExec> = Pages::new(0x1000);
+    /// // .allow_write() is a nop
+    /// let mut memory = memory.allow_write();
+    /// memory[8] = 86;
+    /// ```
+    /// `allow_write` always invalidates previous references.
+    /// ```
+    /// # use pages::*;
+    /// let memory:Pages<AllowRead,DenyWrite,DenyExec> = Pages::new(0x1000);
+    /// let slice = memory.get(0..100).unwrap();
+    /// let mut memory = memory.allow_write();
+    /// // `slice` can't be used after this point, because permissions of `memory` have been changed!
+    /// ```
     #[must_use]
     pub fn allow_write(self) -> Pages<R, AllowWrite, E> {
         self.into_prot()
@@ -413,7 +591,7 @@ impl<W: WritePremisionMarker, E: ExecPremisionMarker> Pages<AllowRead, W, E> {
     /// # Panics
     /// Panics if offset larger than length of [`Pages`].
     #[must_use]
-    pub unsafe fn get_ptr(&self, offset: usize) -> *const u8 {
+    pub fn get_ptr(&self, offset: usize) -> *const u8 {
         std::ptr::addr_of!(self[offset])
     }
 }
@@ -421,7 +599,7 @@ impl<R: ReadPremisionMarker, E: ExecPremisionMarker> Pages<R, AllowWrite, E> {
     /// Gets a pointer to data inside page at `offset`.
     /// # Safety
     /// This pointer may be only written into, and while reading data from it may work on some systems, it is an UB which may cause crashes.
-    pub unsafe fn get_ptr_mut(&mut self, offset: usize) -> *mut u8 {
+    pub fn get_ptr_mut(&mut self, offset: usize) -> *mut u8 {
         unsafe {
             std::ptr::addr_of_mut!(std::slice::from_raw_parts_mut(self.ptr, self.len)[offset])
         }
@@ -448,7 +626,7 @@ impl<R: ReadPremisionMarker, W: WritePremisionMarker> Pages<R, W, AllowExec> {
     /// let ptr = memory.get_fn_ptr(0x1000);
     /// let ptr = memory.get_fn_ptr(0x1001);
     ///```
-    /// Defencing a pointer acquired from calling `get_fn_ptr` on `Pages` with DenyRead is an UB and may cause a segfault on some systems.
+    /// Defencing a pointer acquired from calling `get_fn_ptr` on `Pages` with [`DenyRead`] is an UB and may cause a segfault on some systems.
     ///```should_panic
     /// # use pages::*;
     /// let memory:Pages<DenyRead,DenyWrite,AllowExec> = Pages::new(0x1000);
@@ -477,7 +655,7 @@ impl<R: ReadPremisionMarker, W: WritePremisionMarker> Pages<R, W, AllowExec> {
     /// let nop:extern "C" fn() = unsafe{memory.get_fn(0)};
     /// nop();
     /// ```
-    /// A function that adds 2 numbers. It is architecture specific, and works on x86_64 linux.
+    /// A function that adds 2 numbers. It is architecture specific, and works on `x86_64` linux.
     /// ```no_run
     /// # use pages::*; 
     /// let mut memory:Pages<AllowRead,AllowWrite,DenyExec> = Pages::new(0x4000);
@@ -627,6 +805,30 @@ mod test {
             for j in 0..256 {
                 assert_eq!(i + j, add(i, j));
             }
+        }
+    }
+    #[test]
+    fn test_page_vec(){
+        let mut vec:PagedVec<u64> = PagedVec::new(0x1000);
+        assert!(vec.capacity() == 0x1000);
+        for i in 0..vec.capacity(){
+            vec.push_within_capacity(i as u64).expect("could not push!");
+        }
+    }
+    #[test]
+    fn test_page_vec_push(){
+        let mut vec:PagedVec<u64> = PagedVec::new(0x1000);
+        assert!(vec.capacity() == 0x1000);
+        for i in 0..0x8000{
+            vec.push(i as u64);
+        }
+    }
+    #[test]
+    fn test_page_vec_drop(){
+        let mut vec:PagedVec<String> = PagedVec::new(0x1000);
+        assert!(vec.capacity() == 0x1000);
+        for i in 0..vec.capacity(){
+            vec.push_within_capacity("".to_owned()).expect("could not push!");
         }
     }
 }

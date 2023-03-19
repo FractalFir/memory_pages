@@ -16,9 +16,8 @@ fn system_alloc(bench: &mut Bencher) {
 }
 fn page_alloc(bench: &mut Bencher) {
     use pages::*;
-    let layout = std::alloc::Layout::from_size_align(BIG_ALLOC_SIZE, 1).unwrap();
     bench.iter(|| {
-        let page: Pages<AllowRead, AllowWrite, AllowExec> = Pages::new(BIG_ALLOC_SIZE);
+        let _page: Pages<AllowRead, AllowWrite, AllowExec> = Pages::new(BIG_ALLOC_SIZE);
     })
 }
 fn small_system_alloc(bench: &mut Bencher) {
@@ -31,9 +30,8 @@ fn small_system_alloc(bench: &mut Bencher) {
 }
 fn small_page_alloc(bench: &mut Bencher) {
     use pages::*;
-    let layout = std::alloc::Layout::from_size_align(SMALL_ALLOC_SIZE, 1).unwrap();
     bench.iter(|| {
-        let page: Pages<AllowRead, AllowWrite, AllowExec> = Pages::new(BIG_ALLOC_SIZE);
+        let _page: Pages<AllowRead, AllowWrite, AllowExec> = Pages::new(BIG_ALLOC_SIZE);
     })
 }
 benchmark_group!(benches, system_alloc, page_alloc,small_system_alloc, small_page_alloc);
