@@ -4,7 +4,7 @@ use bencher::Bencher;
 use std::alloc::GlobalAlloc;
 
 const SMALL_ALLOC_SIZE: usize = 0x1FFE001;
-const BIG_ALLOC_SIZE: usize =   0x2000000;
+const BIG_ALLOC_SIZE: usize = 0x2000000;
 
 fn system_alloc(bench: &mut Bencher) {
     let layout = std::alloc::Layout::from_size_align(BIG_ALLOC_SIZE, 1).unwrap();
@@ -34,5 +34,11 @@ fn small_page_alloc(bench: &mut Bencher) {
         let _page: Pages<AllowRead, AllowWrite, AllowExec> = Pages::new(BIG_ALLOC_SIZE);
     })
 }
-benchmark_group!(benches, system_alloc, page_alloc,small_system_alloc, small_page_alloc);
+benchmark_group!(
+    benches,
+    system_alloc,
+    page_alloc,
+    small_system_alloc,
+    small_page_alloc
+);
 benchmark_main!(benches);

@@ -13,3 +13,6 @@ bencher = "0.1.5"
 [[bench]]
 name = "alloc_cmp"
 harness = false
+[features]
+# Implements Fn traits for all UnsafeCallable-s
+# fn_traits = []
