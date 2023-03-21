@@ -1,4 +1,7 @@
 use crate::*;
+/// A reference to a function inside [`Pages`]. It enforces that it may never outlive the [`Pages`] it is contained in, 
+/// preventing lifetime related errors. Additionally, it enforces that if [`Pages`] permissions are changes, all [`FnRef`]
+/// referencing it will be invalidated, preventing exploits related to page permissions.
 pub struct FnRef<'a, F: ExternFnPtr> {
     fnc: F,
     pd: PhantomData<&'a ()>,
@@ -12,12 +15,30 @@ impl<'a, F: ExternFnPtr> FnRef<'a, F> {
     }
 }
 impl<'a, F: ExternFnPtr + Copy> FnRef<'a, F> {
-    pub unsafe fn leak(&self) -> F {
+    /// Returns the internal function.
+    /// # Safety
+    /// It is up to the user to ensure [`Pages`] returned function resides in lives long enough.
+    /// # Examples
+    /// ```
+    /// # use pages::*;
+    /// let mut memory:Pages<AllowRead,AllowWrite,DenyExec> = Pages::new(0x4000);
+    /// // X86_64 assembly instruction `RET`
+    /// memory[0] = 0xC3;
+    /// let memory = memory.set_protected_exec();
+    /// let nop:unsafe extern "C" fn() = unsafe{memory.get_fn(0).internal_fn()};
+    /// // Since nothing is known about functions inside this page during
+    /// // the compilation process, calling a function from a page is inherently unsafe.
+    /// unsafe{nop()};
+    /// ```
+    pub unsafe fn internal_fn(&self) -> F {
         self.fnc
     }
 }
+/// Trait representing an unsafe function that may be called.
 pub trait UnsafeCallable<Args> {
+    /// Return type of represented function
     type Ret;
+    /// Calls the underlying function.
     unsafe fn call(&self, args: Args) -> Self::Ret;
 }
 impl<'a, Ret> UnsafeCallable<()> for FnRef<'a, unsafe extern "C" fn() -> Ret> {

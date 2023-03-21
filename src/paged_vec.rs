@@ -1,4 +1,7 @@
 use crate::Pages;
+use std::borrow::{Borrow, BorrowMut};
+use std::marker::PhantomData;
+use std::ops::{Deref, DerefMut};
 /// A [`Vec`]-like type located in memory pages acquired directly from the kernel. For big lengths a faster to
 /// allocate/deallocate than a normal [`Vec`], but considerably slower for small sizes. Intended to be used for very large data
 /// sets, with a rough estimate of capacity known ahead of time.
@@ -9,24 +12,24 @@ use crate::Pages;
 /// 3. More conservative growth. Since [`PagedVec`] is intended for very large sizes, it is considerably more conservative with
 /// allocating memory(1.5x previous cap instead of 2x for standard [`Vec`].
 /// # Disadvantages
-/// 1. Slower for small data sets
+/// 1. Slower to realocate for small data sets
 /// 2. Can't be turned into a [`Box<[T]>`]
-use std::borrow::{Borrow, BorrowMut};
-use std::marker::PhantomData;
-use std::ops::{Deref, DerefMut};
+/// # Examples
+/// Some examples/documentation for functions of this type are derived from examples for [`Vec`] in rust standard library, to 
+/// better highlight the differences and similarities.
 pub struct PagedVec<T: Sized> {
     data: Pages<crate::AllowRead, crate::AllowWrite, crate::DenyExec>,
     len: usize,
     pd: PhantomData<T>,
 }
 impl<T: Sized> PagedVec<T> {
-    /// Creates a new [`PagedVec`] with `capacity`.
+    /// Creates a new [`PagedVec`] with specified `capacity`.
     /// # Examples
     /// ```
     /// # use pages::*;
     /// // capacity must be specified!
     /// let mut vec = PagedVec::new(0x1000);
-    /// vec.push(0.0);
+    /// vec.push_within_capacity(0.0).unwrap();
     /// ```
     pub fn new(capacity: usize) -> Self {
         let bytes_min = (capacity * std::mem::size_of::<T>()).max(0x1000);
@@ -38,6 +41,18 @@ impl<T: Sized> PagedVec<T> {
         }
     }
     /// Pushes `t` into `self` if under capacity, else returns `t`.
+    /// # Examples
+    /// ```
+    /// # use pages::*;
+    /// let mut vec = PagedVec::new(0x1000);
+    /// // Push is within capacity, OK!
+    /// vec.push_within_capacity(0.0).unwrap();
+    /// for _ in 0..(vec.capacity() - 1){
+    ///     vec.push_within_capacity(1.23).unwrap();
+    /// }
+    /// // push outside capacity, pushed value returned!
+    /// assert_eq!(vec.push_within_capacity(5.6),Err(5.6));
+    #[must_use]
     pub fn push_within_capacity(&mut self, t: T) -> Result<(), T> {
         if self.len * std::mem::size_of::<T>() < self.data.len() {
             let slice = unsafe {
@@ -65,21 +80,44 @@ impl<T: Sized> PagedVec<T> {
     /// Reserves capacity for at least additional more elements to be inserted in the given [`PagedVec<T>`]. The collection may
     /// reserve more space to speculatively avoid frequent reallocations. After calling reserve, capacity will be greater than
     /// or equal to self.len() + additional. Does nothing if capacity is already sufficient.
+    /// # Examples
+    /// ```
+    /// # use pages::*;
+    /// let mut vec:PagedVec<u8> = PagedVec::new(0x4000);
+    /// let init_cap = vec.capacity();
+    /// // Capacity was less or equal to current capacity, no need to reallocate.
+    /// vec.reserve(0x4000);
+    /// assert_eq!(init_cap,vec.capacity());
+    /// // Requested higher capacity, a reallocation may occur!
+    /// vec.reserve(0x8000);
+    /// assert!(init_cap<vec.capacity());
+    /// ```
     pub fn reserve(&mut self, additional: usize) {
-        if self.len() + additional < self.capacity() {
+        if self.len() + additional <= self.capacity() {
             return;
-        }
-        self.resize(Self::get_next_cap(self.len() + additional));
+        };
+        self.resize((self.len() + additional).max(Self::get_next_cap(self.capacity())));
     }
     /// Reserves the minimum capacity for at least additional more elements to be inserted in the given [`PagedVec<T>`]. Unlike
     /// reserve, this will not deliberately over-allocate to speculatively avoid frequent allocations. After calling
     /// [`Self::reserve_exact`], capacity will be greater than or equal to self.len() + additional. Does nothing if the capacity is
     /// already sufficient.
     ///
-    ///
     /// Note that the allocator may give the collection more space than it requests. Therefore, capacity can not be relied upon
     /// to be precisely minimal. Using reserve before [`Self::push`] is preferred over using just [`Self::push`], because
     /// reallocation's of [`PagedVec`] are slow.
+    /// # Examples
+    /// ```
+    /// # use pages::*;
+    /// let mut vec:PagedVec<u8> = PagedVec::new(0x4000);
+    /// let init_cap = vec.capacity();
+    /// // Capacity was less or equal to current capacity, no need to reallocate.
+    /// vec.reserve_exact(0x4000);
+    /// assert_eq!(init_cap,vec.capacity());
+    /// // Requested higher capacity, a reallocation may occur!
+    /// vec.reserve_exact(0x8000);
+    /// assert!(init_cap<vec.capacity());
+    /// ```
     pub fn reserve_exact(&mut self, additional: usize) {
         if self.len() + additional < self.capacity() {
             return;
@@ -91,6 +129,23 @@ impl<T: Sized> PagedVec<T> {
     ///
     /// Note: Because this shifts over the remaining elements, it has a
     /// worst-case performance of *O*(*n*).
+    /// 
+    /// # Panics
+    ///
+    /// Panics if `index` is out of bounds.
+    ///
+    /// # Examples
+    /// ```
+    /// # use pages::PagedVec;
+    /// let mut v = PagedVec::new(3);
+    /// v.push(1); 
+    /// v.push(2); 
+    /// v.push(3); 
+    /// # v[2] = 3 as u8; 
+    /// assert_eq!(v.remove(1), 2);
+    /// let slice:&[u8] = &[1, 3];
+    /// assert_eq!(v,slice);
+    /// ```
     pub fn remove(&mut self, index: usize) -> T {
         // Taken form std lib.
         let ret;
@@ -135,6 +190,18 @@ impl<T: Sized> PagedVec<T> {
         res
     }
     /// Clears the vector, removing all values.
+    /// # Examples
+    /// ```
+    /// # use pages::*;
+    /// let mut vec = PagedVec::new(0x1000);
+    /// vec.push(8);
+    /// let cap = vec.capacity();
+    /// vec.clear();
+    /// // After clearing length is 0
+    /// assert_eq!(vec.len(),0);
+    /// // But the capacity does not change!
+    /// assert_eq!(vec.capacity(),cap);
+    /// ```
     pub fn clear(&mut self) {
         self.drop_all();
         self.len = 0;
@@ -202,5 +269,42 @@ mod test {
             vec.push_within_capacity("".to_owned())
                 .expect("could not push!");
         }
+    }
+}
+use std::fmt::{Debug,Formatter};
+impl<T:Debug> Debug for PagedVec<T>{
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
+        Debug::fmt(&**self, f)
+    }
+}
+impl<T:PartialEq> PartialEq<[T]> for PagedVec<T>{
+    fn eq(&self, other: &[T]) -> bool {
+        self[..] == other[..]
+    }
+}
+impl<T:PartialEq> PartialEq<&[T]> for PagedVec<T>{
+    fn eq(&self, other: &&[T]) -> bool {
+        self[..] == (*other)[..]
+    }
+}
+impl<T:PartialEq> PartialEq<Vec<T>> for PagedVec<T>{
+    fn eq(&self, other: &Vec<T>) -> bool {
+        self[..] == other[..]
+    }
+}
+impl<T:Clone> Clone for PagedVec<T>{
+    fn clone(&self) -> Self {
+        let mut cloned = Self::new(self.capacity());
+        for t in self{
+            cloned.push(t.clone());
+        }
+        cloned
+    }
+} 
+impl<'a,T> IntoIterator for &'a PagedVec<T>{
+    type Item = &'a T;
+    type IntoIter = std::slice::Iter<'a, T>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
     }
 }

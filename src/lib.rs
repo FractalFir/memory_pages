@@ -4,7 +4,7 @@
 //! set(read,write,execute). It provides an very safe API to aid in many use cases, mainly:
 //! 1. Speeds up operating on large data sets: [`PagedVec`] provides speed advantages over standard [`Vec`] for large data
 //! types.
-//! 2. Simplifies dealing with page permissions and allows for additional levels of safety: Pages with [`DennyWrite`] cannot be
+//! 2. Simplifies dealing with page permissions and allows for additional levels of safety: Pages with [`DenyWrite`] cannot be
 //! written into without their permissions being changed, which allows for certain kinds of bugs to cause segfaults insted of overwriting data.
 //! 3. Simplifies JITs - while dealing with memory pages is simple compared to difficulty of the task, which is writing a
 //! Just-In-Time compiler, this crate abstracts the platform specific differences away and adds additional measures to prevent
