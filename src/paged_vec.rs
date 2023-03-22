@@ -1,3 +1,4 @@
+// All functions properly documented, with examples!
 use crate::Pages;
 use std::borrow::{Borrow, BorrowMut};
 use std::marker::PhantomData;
@@ -13,7 +14,7 @@ use std::ops::{Deref, DerefMut};
 /// allocating memory(1.5x previous cap instead of 2x for standard [`Vec`].
 /// # Disadvantages
 /// 1. Slower to realocate for small data sets
-/// 2. Can't be turned into a [`Box<[T]>`]
+/// 2. Can't be turned into a `Box<[T]>`
 /// # Examples
 /// Some examples/documentation for functions of this type are derived from examples for [`Vec`] in rust standard library, to 
 /// better highlight the differences and similarities.
@@ -65,17 +66,27 @@ impl<T: Sized> PagedVec<T> {
             Err(t)
         }
     }
+    /// Advises this [`PageVec`] that `used` elements are going to be in use soon.
+    pub fn advise_use_soon(&mut self,used:usize){
+        if self.len() < used{
+            self.resize(used);
+        }
+        self.data.advise_use_soon(used);
+    }
     fn get_next_cap(cap: usize) -> usize {
         (cap + cap / 2).max(0x1000)
     }
     fn resize(&mut self, next_cap: usize) {
         let bytes_cap = next_cap * std::mem::size_of::<T>();
-        let mut data = Pages::new(bytes_cap);
+        self.data.resize(bytes_cap);
+        /*
         let cpy_len = self.len() * std::mem::size_of::<T>();
+        let mut data = Pages::new(bytes_cap);
         data.split_at_mut(cpy_len)
             .0
             .copy_from_slice(self.data.split_at_mut(cpy_len).0);
         self.data = data;
+        */
     }
     /// Reserves capacity for at least additional more elements to be inserted in the given [`PagedVec<T>`]. The collection may
     /// reserve more space to speculatively avoid frequent reallocations. After calling reserve, capacity will be greater than
@@ -163,7 +174,19 @@ impl<T: Sized> PagedVec<T> {
         ret
     }
     /// Pushes `t` into `self` and reallocates if over capacity. Generally unadvised, because reallocation's of [`PagedVec`]-s
-    /// are very slow. Setting sufficient capacity and using [`Self::push_within_capacity`] is generally encouraged.  
+    /// are very slow. Setting sufficient capacity and using [`Self::push_within_capacity`] is generally encouraged. 
+     /// Pushes `t` into `self` if under capacity, else returns `t`.
+    /// # Examples
+    /// ```
+    /// # use pages::*;
+    /// let mut vec = PagedVec::new(0x1000);
+    /// // Push is within capacity, no realocations!
+    /// vec.push(0.0);
+    /// for _ in 0..(vec.capacity() - 1){
+    ///     vec.push(1.23);
+    /// }
+    /// // push outside capacity, a slow reallocation occurs, but `push` still succeeds! 
+    /// vec.push(5.6);
     pub fn push(&mut self, t: T) {
         if let Err(t) = self.push_within_capacity(t) {
             self.resize(Self::get_next_cap(self.capacity()));
@@ -174,20 +197,51 @@ impl<T: Sized> PagedVec<T> {
         }
     }
     /// Gets the capacity of `self`.
+    /// ```
+    /// # use pages::*;
+    /// let mut vec = PagedVec::new(0x1000);
+    /// // `vec` can store `cap` items in total.
+    /// let cap = vec.capacity();
+    /// let remaining = vec.capacity() - vec.len();
+    /// // `push_within_capacity` `remaining` times will succeed.
+    /// for _ in 0..remaining{
+    ///     vec.push_within_capacity(0.5).unwrap();
+    /// }
+    /// // No more space left!
+    /// assert_eq!(vec.capacity() - vec.len(),0);
+    /// // pushing over capacity will fail.
+    /// assert_eq!(vec.push_within_capacity(0.7),Err(0.7));
+    /// ```
     #[must_use]
     pub fn capacity(&self) -> usize {
         self.data.len() / std::mem::size_of::<T>()
     }
-    /// Pops the last element from self
-    pub fn pop(&mut self) -> T {
+    /// Pops the last element from `self`
+    /// ```
+    /// # use pages::*;
+    /// let mut vec = PagedVec::new(0x1000);
+    /// vec.push(0);
+    /// vec.push(1);
+    /// vec.push(2);
+    /// vec.push(3);
+    /// assert_eq!(vec.pop(),Some(3));
+    /// assert_eq!(vec.pop(),Some(2));
+    /// assert_eq!(vec.pop(),Some(1));
+    /// assert_eq!(vec.pop(),Some(0));
+    /// assert_eq!(vec.pop(),None);
+    /// ```
+    pub fn pop(&mut self) -> Option<T>{
         use std::mem::MaybeUninit;
-        let last_index = self.len;
+        if self.len == 0{
+            return None;
+        }
+        let last_index = self.len - 1;
         // This is safe, because res is swapped into the page and can only be overwritten, never read from.
         #[allow(clippy::uninit_assumed_init)]
         let mut res = unsafe { MaybeUninit::uninit().assume_init() };
         std::mem::swap(&mut self[last_index], &mut res);
         self.len -= 1;
-        res
+        Some(res)
     }
     /// Clears the vector, removing all values.
     /// # Examples

@@ -14,5 +14,6 @@ bencher = "0.1.5"
 name = "alloc_cmp"
 harness = false
 [features]
-# Implements Fn traits for all UnsafeCallable-s
-# fn_traits = []
+deafault = ["deny_xw"]
+deny_xw = []
+allow_exec = []
