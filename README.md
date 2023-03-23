@@ -11,35 +11,20 @@ But what if you are one of the 1% of people who really need those `unsafe` featu
 This crate is going to say: Here's the gun. It has safety measures that prevent accidental misuse, but you do you.
 
 Do you feel really dicey and want some of those juicy potential security vulnerabilities? Just toggle a feature and you are good to go.
-## Fine grain adjustments
-Are you one of those poor souls that work with enormous data sets that also need processing as fast as possible? Does every nanosecond count? 
-
-Oh boy, have I got a crate for you. 
-
-Pages provides access to **extermaly** fine grain adjustments that can save time. Is the meory use going to be sequential or random?
-
-# What is this crate?
-`pages` is a small crate providing a cross-platform API to request pages from kernel with certain permission modes 
-set(read,write,execute). It provides an very safe API to aid in many use cases, mainly:
-1. Speeds up operating on large data sets: `PagedVec` provides speed advantages over standard `Vec` for large data 
-types.
-2. Simplifies dealing with page permissions and allows for additional levels of safety: Pages with `DennyWrite` cannot be 
-written into without their permissions being changed, which allows for certain kinds of bugs to cause segfaults insted of overwriting data. 
-3. Simplifies JITs - while dealing with memory pages is simple compared to difficulty of the task, which is writing a 
-Just-In-Time compiler, this crate abstracts the platform specific differences away and adds additional measures to prevent 
-/some security issues, allowing you to focus on writing the compiler itself, without worrying about those low-level details
-# Error-proof API
-`pages` API tries its best to actively prevent you from misusing it. It is, for example, impossible to acquire a mutable reference to a memory page which does not allow writes. Built-in marker types ensure those restrictions are represented an enforced within the rust type system, making all of those checks occur at compile time!
+## The biggest benefit and curse is...
+Fine grain adjustments. If used without any care in the world, this crate has very low to none real performance gain. But, if used propely, the gains can be very noticeable. Speed of allocating a very large(>35MB) data structure can be cut down to half the time. A great example of those gains is the `PagedVec`. A drop-in replacement for `Vec` meant for storing large amount of data. In the test case, both `PagedVec` and `Vec` were provided a very rough estimate for required capacity(1/10 of the final push count). This hint was meant to give both types even playing field, while presenting a real world use case for `PagedVec`. In tests, `PagedVec` was around 40% faster than regular `Vec`. While real-world performance gains will be usually smaller, this shows the  potential coming from more involved memory management.
+## Kernel memory usage hints
+Is the memory use going to be sequential or random? Provide optional hints to the kernel which may improve performance in some cases.
 # Examples
 ## Dealing with pages directly
 ### x86_64 function assembled at run-time
 This example does not work on windows, due to differences in the calling conventions
 ```rust
-use pages::*; 
+use pages::*;
 let mut memory:Pages<AllowRead,AllowWrite,DenyExec> = Pages::new(0x4000);
 
 // hex-encoded X86_64 assembly for adding 2 numbers
-// lea     rax, [rdi+rsi]
+// lea 	rax, [rdi+rsi]
 memory[0] = 0x48;
 memory[1] = 0x8d;
 memory[2] = 0x04;
@@ -54,4 +39,6 @@ assert_eq!(add(43,34),77);
 ```
 ## PagedVec
 
+# Benchmark setup
+Benchmark setup has been altered to run benchmarks for much longer times(10x) in order to reduce noise.
 

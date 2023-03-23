@@ -10,13 +10,13 @@ use std::ops::{Deref, DerefMut};
 /// 1. 2-3x times faster than default allocator for big vec sizes (over ~20 MB).
 /// 2. memory is released directly to the kernel as soon as [`PagedVec`] is dropped, which may not always be the case for
 /// standard allocator, leading to decreased memory footprint.
-/// 3. More conservative growth. Since [`PagedVec`] is intended for very large sizes, it is considerably more conservative with
-/// allocating memory(1.5x previous cap instead of 2x for standard [`Vec`].
+// 3. More conservative growth model. Since [`PagedVec`] is intended for very large sizes, it is considerably more conservative with
+// allocating memory(1.5x previous cap instead of 2x for standard [`Vec`].
 /// # Disadvantages
 /// 1. Slower to realocate for small data sets
 /// 2. Can't be turned into a `Box<[T]>`
 /// # Examples
-/// Some examples/documentation for functions of this type are derived from examples for [`Vec`] in rust standard library, to 
+/// Some examples/documentation for functions of this type are derived from examples for [`Vec`] in rust standard library, to
 /// better highlight the differences and similarities.
 pub struct PagedVec<T: Sized> {
     data: Pages<crate::AllowRead, crate::AllowWrite, crate::DenyExec>,
@@ -66,15 +66,26 @@ impl<T: Sized> PagedVec<T> {
             Err(t)
         }
     }
-    /// Advises this [`PageVec`] that `used` elements are going to be in use soon.
-    pub fn advise_use_soon(&mut self,used:usize){
-        if self.len() < used{
+    /// Advises this [`PagedVec`] that `used` elements are going to be in use soon.
+    /// # Beware
+    /// Usage hints are part of fine-grain memory access adjustments. It is *NOT* always beneficial to use, in 
+    /// contrary, it very often slows allocations down. Before using them, test each usage.
+    pub fn advise_use_soon(&mut self, used: usize) {
+        if self.len() < used {
             self.resize(used);
         }
         self.data.advise_use_soon(used);
     }
+    /// Advises this [`PagedVec`] that it is going to be accessed sequentially.
+    /// # Beware
+    /// Usage hints are part of fine-grain memory access adjustments. It is *NOT* always beneficial to use, in 
+    /// contrary, it very often slows allocations down. Before using them, test each usage.
+    pub fn advise_use_seq(&mut self) {
+        self.data.advise_use_seq();
+    }
     fn get_next_cap(cap: usize) -> usize {
-        (cap + cap / 2).max(0x1000)
+        //(cap + cap / 2).max(0x1000)
+        cap*2
     }
     fn resize(&mut self, next_cap: usize) {
         let bytes_cap = next_cap * std::mem::size_of::<T>();
@@ -140,7 +151,7 @@ impl<T: Sized> PagedVec<T> {
     ///
     /// Note: Because this shifts over the remaining elements, it has a
     /// worst-case performance of *O*(*n*).
-    /// 
+    ///
     /// # Panics
     ///
     /// Panics if `index` is out of bounds.
@@ -149,10 +160,10 @@ impl<T: Sized> PagedVec<T> {
     /// ```
     /// # use pages::PagedVec;
     /// let mut v = PagedVec::new(3);
-    /// v.push(1); 
-    /// v.push(2); 
-    /// v.push(3); 
-    /// # v[2] = 3 as u8; 
+    /// v.push(1);
+    /// v.push(2);
+    /// v.push(3);
+    /// # v[2] = 3 as u8;
     /// assert_eq!(v.remove(1), 2);
     /// let slice:&[u8] = &[1, 3];
     /// assert_eq!(v,slice);
@@ -174,8 +185,8 @@ impl<T: Sized> PagedVec<T> {
         ret
     }
     /// Pushes `t` into `self` and reallocates if over capacity. Generally unadvised, because reallocation's of [`PagedVec`]-s
-    /// are very slow. Setting sufficient capacity and using [`Self::push_within_capacity`] is generally encouraged. 
-     /// Pushes `t` into `self` if under capacity, else returns `t`.
+    /// are very slow. Setting sufficient capacity and using [`Self::push_within_capacity`] is generally encouraged.
+    /// Pushes `t` into `self` if under capacity, else returns `t`.
     /// # Examples
     /// ```
     /// # use pages::*;
@@ -185,7 +196,7 @@ impl<T: Sized> PagedVec<T> {
     /// for _ in 0..(vec.capacity() - 1){
     ///     vec.push(1.23);
     /// }
-    /// // push outside capacity, a slow reallocation occurs, but `push` still succeeds! 
+    /// // push outside capacity, a slow reallocation occurs, but `push` still succeeds!
     /// vec.push(5.6);
     pub fn push(&mut self, t: T) {
         if let Err(t) = self.push_within_capacity(t) {
@@ -230,9 +241,9 @@ impl<T: Sized> PagedVec<T> {
     /// assert_eq!(vec.pop(),Some(0));
     /// assert_eq!(vec.pop(),None);
     /// ```
-    pub fn pop(&mut self) -> Option<T>{
+    pub fn pop(&mut self) -> Option<T> {
         use std::mem::MaybeUninit;
-        if self.len == 0{
+        if self.len == 0 {
             return None;
         }
         let last_index = self.len - 1;
@@ -325,37 +336,37 @@ mod test {
         }
     }
 }
-use std::fmt::{Debug,Formatter};
-impl<T:Debug> Debug for PagedVec<T>{
+use std::fmt::{Debug, Formatter};
+impl<T: Debug> Debug for PagedVec<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
         Debug::fmt(&**self, f)
     }
 }
-impl<T:PartialEq> PartialEq<[T]> for PagedVec<T>{
+impl<T: PartialEq> PartialEq<[T]> for PagedVec<T> {
     fn eq(&self, other: &[T]) -> bool {
         self[..] == other[..]
     }
 }
-impl<T:PartialEq> PartialEq<&[T]> for PagedVec<T>{
+impl<T: PartialEq> PartialEq<&[T]> for PagedVec<T> {
     fn eq(&self, other: &&[T]) -> bool {
         self[..] == (*other)[..]
     }
 }
-impl<T:PartialEq> PartialEq<Vec<T>> for PagedVec<T>{
+impl<T: PartialEq> PartialEq<Vec<T>> for PagedVec<T> {
     fn eq(&self, other: &Vec<T>) -> bool {
         self[..] == other[..]
     }
 }
-impl<T:Clone> Clone for PagedVec<T>{
+impl<T: Clone> Clone for PagedVec<T> {
     fn clone(&self) -> Self {
         let mut cloned = Self::new(self.capacity());
-        for t in self{
+        for t in self {
             cloned.push(t.clone());
         }
         cloned
     }
-} 
-impl<'a,T> IntoIterator for &'a PagedVec<T>{
+}
+impl<'a, T> IntoIterator for &'a PagedVec<T> {
     type Item = &'a T;
     type IntoIter = std::slice::Iter<'a, T>;
     fn into_iter(self) -> Self::IntoIter {

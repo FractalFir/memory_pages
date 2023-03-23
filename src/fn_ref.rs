@@ -1,5 +1,5 @@
 use crate::*;
-/// A reference to a function inside [`Pages`]. It enforces that it may never outlive the [`Pages`] it is contained in, 
+/// A reference to a function inside [`Pages`]. It enforces that it may never outlive the [`Pages`] it is contained in,
 /// preventing lifetime related errors. Additionally, it enforces that if [`Pages`] permissions are changes, all [`FnRef`]
 /// referencing it will be invalidated, preventing exploits related to page permissions.
 pub struct FnRef<'a, F: ExternFnPtr> {
@@ -7,7 +7,10 @@ pub struct FnRef<'a, F: ExternFnPtr> {
     pd: PhantomData<&'a ()>,
 }
 impl<'a, F: ExternFnPtr> FnRef<'a, F> {
-    pub(crate) fn new<R: ReadPremisionMarker,W: WritePremisionMarker>(fnc: F, _page: &'a Pages<R,W,AllowExec>) -> Self {
+    pub(crate) fn new<R: ReadPremisionMarker, W: WritePremisionMarker>(
+        fnc: F,
+        _page: &'a Pages<R, W, AllowExec>,
+    ) -> Self {
         Self {
             fnc,
             pd: PhantomData,

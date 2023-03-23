@@ -4,22 +4,22 @@
 //! set(read,write,execute). It provides an very safe API to aid in many use cases, mainly:
 //! 1. Speeds up operating on large data sets: [`PagedVec`] provides allocation speed advantages over standard [`Vec`] for large data.
 //! types.
-//! 2. Page alignment guarantee. Since the API returns memory pages, the first address inside [`Pages`] must be aligned to a page boundary. This means, that with a bit of careful selection of type sizes(powers of 2), a substantial speedup can be occurred(structures can be guaranteed to always reside entirely within 1 page). Those sorts of guarantees are not normally given by allocators. 
+//! 2. Page alignment guarantee. Since the API returns memory pages, the first address inside [`Pages`] must be aligned to a page boundary. This means, that with a bit of careful selection of type sizes(powers of 2), a substantial speedup can be occurred(structures can be guaranteed to always reside entirely within 1 page). Those sorts of guarantees are not normally given by allocators.
 //! 3. Simplifies dealing with page permissions and allows for additional levels of safety: Pages with [`DenyWrite`] cannot be
 //! written into without their permissions being changed, which allows for certain kinds of bugs to cause segfaults insted of overwriting data.
 //! 4. Simplifies JITs - while dealing with memory pages is simple compared to difficulty of the task, which is writing a
 //! Just-In-Time compiler, this crate abstracts the platform specific differences away and adds additional measures to prevent
 //! some security issues, allowing you to focus on writing the compiler itself, without worrying about those low-level details.
-//! # Features 
+//! # Features
 //! `allow_exec` - this feature allows access to everything related to executing code inside allocated pages. Off by default.
-//! `deny_xw` - default feature that prevents allowing both `eXecution` and `Write` permissions on a page. This is an additional security feature that prevents accidental misuse of the API-s locked behind `allow_exec` feature. Does noting without it, but is really usefull when `allow_exec` enabled. 
+//! `deny_xw` - default feature that prevents allowing both `eXecution` and `Write` permissions on a page. This is an additional security feature that prevents accidental misuse of the API-s locked behind `allow_exec` feature. Does noting without it, but is really usefull when `allow_exec` enabled.
 #![warn(missing_docs)]
 #![warn(rustdoc::missing_doc_code_examples)]
 
+mod advise;
 #[cfg(feature = "allow_exec")]
 mod extern_fn_ptr;
 mod paged_vec;
-mod advise;
 #[doc(inline)]
 pub use advise::*;
 #[cfg(feature = "allow_exec")]
@@ -28,7 +28,8 @@ use core::fmt::Pointer;
 mod fn_ref;
 #[cfg(feature = "allow_exec")]
 use extern_fn_ptr::ExternFnPtr;
-#[doc(inline)]#[cfg(feature = "allow_exec")]
+#[doc(inline)]
+#[cfg(feature = "allow_exec")]
 pub use fn_ref::*;
 #[doc(inline)]
 pub use paged_vec::*;
@@ -67,9 +68,9 @@ extern "C" {
     fn munmap(addr: *mut c_void, length: usize) -> c_int;
     fn mprotect(addr: *mut c_void, len: usize, prot: c_int) -> c_int;
     fn strerror(errnum: c_int) -> *const i8;
-    fn mremap(old_addr:*mut c_void,old_size:usize,new_size:usize,flags:c_int)->*mut c_void;
-    #[cfg(target_os = "linux")]//TODO: maybe add other OS-s?
-    fn madvise(addr:*mut c_void,length:usize,advice:c_int)->c_int;
+    fn mremap(old_addr: *mut c_void, old_size: usize, new_size: usize, flags: c_int)
+        -> *mut c_void;
+    fn posix_madvise(addr: *mut c_void, length: usize, advice: c_int) -> c_int;
 }
 /// Marks if a [`Pages`] can be read from.
 pub trait ReadPremisionMarker {
@@ -144,7 +145,7 @@ impl WritePremisionMarker for DenyWrite {
 /// # Safety
 /// Set [`AllowExec`] permission  only if you can be sure that:
 /// 1. Native instructions inside this Pages are 100% safe
-/// 2. Native instructions inside this Pages may only ever be changed by a 100% safe code. Preferably, set Pages to allow execution only when writes are disabled. To do this flip in one call, use [`Pages::set_protected_exec`]. 
+/// 2. Native instructions inside this Pages may only ever be changed by a 100% safe code. Preferably, set Pages to allow execution only when writes are disabled. To do this flip in one call, use [`Pages::set_protected_exec`].
 #[cfg(feature = "allow_exec")]
 pub struct AllowExec;
 #[cfg(feature = "allow_exec")]
@@ -168,7 +169,7 @@ impl ExecPremisionMarker for DenyExec {
         false
     }
 }
-/// [`Pages`] represents a collection of pages acquired from the kernel. Those pages share a common set of permissions and are laid out contiguously in the memory. The permissions on given [`Pages`] may be changed at runtime. 
+/// [`Pages`] represents a collection of pages acquired from the kernel. Those pages share a common set of permissions and are laid out contiguously in the memory. The permissions on given [`Pages`] may be changed at runtime.
 pub struct Pages<R: ReadPremisionMarker, W: WritePremisionMarker, E: ExecPremisionMarker> {
     ptr: *mut u8,
     len: usize,
@@ -257,12 +258,26 @@ impl<R: ReadPremisionMarker, W: WritePremisionMarker, E: ExecPremisionMarker> Pa
         Self::new_native(length)
     }
     /// Advises this [`Pages`] that `used` bytes are going to be in use soon.
-    pub fn advise_use_soon(&mut self,used:usize){
-        #[cfg(target_os = "linux")]
-        unsafe{
+    /// # Beware
+    /// Usage hints are part of fine-grain memory access adjustments. It is *NOT* always beneficial to use, in 
+    /// contrary, it very often slows allocations down. Before using them, test each usage.
+    pub fn advise_use_soon(&mut self, used: usize) {
+        #[cfg(target_family = "unix")]
+        unsafe {
             let ad_len = self.len.min(used);
-            const MADV_WILLNEED:c_int = 3;
-            madvise(self.ptr as *mut c_void,ad_len,MADV_WILLNEED);
+            const MADV_WILLNEED: c_int = 3;
+            posix_madvise(self.ptr as *mut c_void, ad_len, MADV_WILLNEED);
+        }
+    }
+    /// Advises this [`Pages`] that it is going to be accessed sequentially.
+    /// # Beware
+    /// Usage hints are part of fine-grain memory access adjustments. It is *NOT* always beneficial to use, in 
+    /// contrary, it very often slows allocations down. Before using them, test each usage.
+    pub fn advise_use_seq(&mut self) {
+        #[cfg(target_family = "unix")]
+        unsafe {
+            const POSIX_MADV_SEQUENTIAL: c_int = 2;
+            posix_madvise(self.ptr as *mut c_void, self.len, POSIX_MADV_SEQUENTIAL);
         }
     }
     #[cfg(target_family = "windows")]
@@ -358,13 +373,46 @@ impl<R: ReadPremisionMarker, W: WritePremisionMarker, E: ExecPremisionMarker> Pa
         res.set_prot();
         res
     }
-}
-impl<E:ExecPremisionMarker> Pages<AllowRead,AllowWrite,E>{
-    pub fn resize(&mut self,new_size:usize){
+    fn decomit(&mut self,begining:usize,length:usize){
+        let decomit_len = length.min(self.len - begining);
+        #[cfg(target_os = "windows")]
+        unsafe {
+            let res = DiscardVirtualMemory((self.ptr as usize + begining) as *mut winapi::ctypes::c_void,decomit_len);
+            if (res != 0) && cfg!(debug_assertions){
+                panic!("DiscardVirtualMemory failed.");
+            }
+        }
         #[cfg(target_family = "unix")]
         unsafe {
-            const MREMAP_MAYMOVE:c_int = 1;
-            let ptr = mremap(self.ptr as *mut c_void,self.len,new_size,MREMAP_MAYMOVE);
+            const MADV_DONTNEED:c_int = 4;
+            posix_madvise((self.ptr as usize + begining) as *mut c_void, length,MADV_DONTNEED); 
+        }
+    }
+}
+impl<E: ExecPremisionMarker> Pages<AllowRead, AllowWrite, E> {
+    /// Changes the size of this [`Pages`]
+    /// # Waring
+    /// ## Pointer invalidation
+    /// *Rust mutable borrow rules prevent this from happening in safe code. This section only concerns pointers to 
+    /// data inside pages.*
+    /// 
+    /// A [`Self::resize`] call is very similar to `realloc` function in it's working and effects. While it tries to 
+    /// resize by adding more memory pages, if it can't do that, it will allocate new pages on a completely different 
+    /// location, and copy data there. This means that any pointer to data inside [`Pages`] becomes invalid.
+    /// # Example
+    /// ```
+    /// # use pages::*;
+    /// let mut pages:Pages<AllowRead,AllowWrite,DenyExec> = Pages::new(0x1_000);
+    /// let prev_len = pages.len();
+    /// // Resizing pages changes their length.
+    /// pages.resize(0x10_000);
+    /// assert!(prev_len < pages.len());
+    /// ```
+    pub fn resize(&mut self, new_size: usize) {
+        #[cfg(target_family = "unix")]
+        unsafe {
+            const MREMAP_MAYMOVE: c_int = 1;
+            let ptr = mremap(self.ptr as *mut c_void, self.len, new_size, MREMAP_MAYMOVE);
             if ptr as usize == usize::MAX {
                 let erno = errno_msg();
                 panic!("mmap error, erno:{erno:?}!");
@@ -377,8 +425,8 @@ impl<E:ExecPremisionMarker> Pages<AllowRead,AllowWrite,E>{
             let mut copy = Self::new(new_size);
             let copy_size = copy.len().min(self.len());
             copy.split_at_mut(copy_size)
-            .0
-            .copy_from_slice(self.split_at_mut(copy_size).0);
+                .0
+                .copy_from_slice(self.split_at_mut(copy_size).0);
             *self = copy;
         }
     }
@@ -499,7 +547,7 @@ impl<R: ReadPremisionMarker, W: WritePremisionMarker, E: ExecPremisionMarker> Pa
         self.into_prot()
     }
     #[must_use]
-    /// Sets the [`AllowExec`], while ensuring that the [`DenyExec`] is set, to prevent potential mistakes.
+    /// Sets the [`AllowWrite`], while ensuring that the [`DenyExec`] is set, to prevent potential mistakes.
     /// Preferred over [`Self::allow_write`] if dealing with executable pages, otherwise just use [`Self::allow_write`].
     pub fn allow_write_no_exec(self) -> Pages<R, AllowWrite, DenyExec> {
         self.into_prot()
@@ -509,19 +557,22 @@ impl<R: ReadPremisionMarker, W: WritePremisionMarker, E: ExecPremisionMarker> Pa
     /// This should **NEVER** be set if not needed, because if used improperly, it may lead to Arbitrary Code Execution
     /// exploits. Use *only* if you know what you are doing. [`Self::set_protected_exec`] is a safer alternative, that prevents
     /// most ways an ACE exploit could occur.
-    #[must_use]#[cfg(feature = "allow_exec")]
+    #[must_use]
+    #[cfg(feature = "allow_exec")]
     pub fn allow_exec(self) -> Pages<R, W, AllowExec> {
         self.into_prot()
     }
     /// Sets the permission on [`Pages`] to [`AllowExec`] and [`DenyWrite`] to prevent changing of instructions inside      
     /// [`Pages`]. To re-enable writes, use [`Self::allow_write_no_exec`] to ensure both [`AllowExec`] and [`AllowExec`] are
     /// never set at the same time.
-    #[must_use]#[cfg(feature = "allow_exec")]
+    #[must_use]
+    #[cfg(feature = "allow_exec")]
     pub fn set_protected_exec(self) -> Pages<R, DenyWrite, AllowExec> {
         self.into_prot()
     }
     /// Sets the permission on [`Pages`] to [`DenyExec`], forbidding execution.
-    #[must_use]#[cfg(feature = "allow_exec")]
+    #[must_use]
+    #[cfg(feature = "allow_exec")]
     pub fn deny_exec(self) -> Pages<R, W, DenyExec> {
         self.into_prot()
     }
@@ -617,12 +668,12 @@ impl<R: ReadPremisionMarker, W: WritePremisionMarker> Pages<R, W, AllowExec> {
     #[must_use]
     pub unsafe fn get_fn<F: ExternFnPtr>(&self, offset: usize) -> FnRef<F>
     where
-        F: Copy + Pointer + Sized
+        F: Copy + Pointer + Sized,
     {
         let fn_ptr = self.get_fn_ptr(offset);
         let f: F = *(std::ptr::addr_of!(fn_ptr).cast::<F>());
         let _ = fn_ptr;
-        FnRef::new(f,self)
+        FnRef::new(f, self)
     }
 }
 impl<R: ReadPremisionMarker, W: WritePremisionMarker, E: ExecPremisionMarker> Drop
@@ -650,7 +701,8 @@ impl<R: ReadPremisionMarker, W: WritePremisionMarker, E: ExecPremisionMarker> Dr
 #[cfg(test)]
 mod test {
     use super::*;
-    #[test]#[cfg(feature = "allow_exec")]
+    #[test]
+    #[cfg(feature = "allow_exec")]
     fn test_alloc_rwe() {
         let _pages: Pages<AllowRead, AllowWrite, AllowExec> = Pages::new(256);
     }
@@ -662,11 +714,13 @@ mod test {
     fn test_alloc_r() {
         let _pages: Pages<AllowRead, DenyWrite, DenyExec> = Pages::new(256);
     }
-    #[test]#[cfg(feature = "allow_exec")]
+    #[test]
+    #[cfg(feature = "allow_exec")]
     fn test_alloc_e() {
         let _pages: Pages<DenyRead, DenyWrite, AllowExec> = Pages::new(256);
     }
-    #[test]#[cfg(feature = "allow_exec")]
+    #[test]
+    #[cfg(feature = "allow_exec")]
     fn test_alloc_re() {
         let _pages: Pages<AllowRead, DenyWrite, AllowExec> = Pages::new(256);
     }
@@ -710,7 +764,7 @@ mod test {
             pages[3] = 0x11;
             pages[4] = 0xC3;
         }
-        let nop: FnRef<unsafe extern "C" fn(())> = unsafe { pages.get_fn(0) }; 
+        let nop: FnRef<unsafe extern "C" fn(())> = unsafe { pages.get_fn(0) };
         unsafe { nop.call(()) };
         let add: FnRef<unsafe extern "C" fn(u64, u64) -> u64> = unsafe { pages.get_fn(1) };
         for i in 0..256 {
@@ -723,14 +777,14 @@ mod test {
     fn test_allow_read() {
         let pages: Pages<DenyRead, DenyWrite, DenyExec> = Pages::new(256);
         let pages = pages.allow_read();
-        let rf:&[u8] = &pages;
+        let rf: &[u8] = &pages;
     }
     #[test]
     fn test_allow_write() {
         let pages: Pages<AllowRead, DenyWrite, DenyExec> = Pages::new(256);
         let mut pages = pages.allow_write();
         pages[0] = 243;
-        assert_eq!(pages[0],243); 
+        assert_eq!(pages[0], 243);
     }
     #[test]
     #[cfg(target_arch = "x86_64")]
