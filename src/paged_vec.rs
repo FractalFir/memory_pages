@@ -41,6 +41,10 @@ impl<T: Sized> PagedVec<T> {
             pd: PhantomData,
         }
     }
+    /// An alias for [`Self::new`] provided for compatibility purposes.
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self::new(capacity)
+    }
     /// Pushes `t` into `self` if under capacity, else returns `t`.
     /// # Examples
     /// ```
@@ -68,7 +72,7 @@ impl<T: Sized> PagedVec<T> {
     }
     /// Advises this [`PagedVec`] that `used` elements are going to be in use soon.
     /// # Beware
-    /// Usage hints are part of fine-grain memory access adjustments. It is *NOT* always beneficial to use, in 
+    /// Usage hints are part of fine-grain memory access adjustments. It is *NOT* always beneficial to use, in
     /// contrary, it very often slows allocations down. Before using them, test each usage.
     pub fn advise_use_soon(&mut self, used: usize) {
         if self.len() < used {
@@ -78,21 +82,21 @@ impl<T: Sized> PagedVec<T> {
     }
     /// Advises this [`PagedVec`] that it is going to be accessed sequentially.
     /// # Beware
-    /// Usage hints are part of fine-grain memory access adjustments. It is *NOT* always beneficial to use, in 
+    /// Usage hints are part of fine-grain memory access adjustments. It is *NOT* always beneficial to use, in
     /// contrary, it very often slows allocations down. Before using them, test each usage.
     pub fn advise_use_seq(&mut self) {
         self.data.advise_use_seq();
     }
     /// Advises this [`PagedVec`] that it is going to be accessed randomly.
     /// # Beware
-    /// Usage hints are part of fine-grain memory access adjustments. It is *NOT* always beneficial to use, in 
+    /// Usage hints are part of fine-grain memory access adjustments. It is *NOT* always beneficial to use, in
     /// contrary, it very often slows allocations down. Before using them, test each usage.
     pub fn advise_use_rnd(&mut self) {
         self.data.advise_use_rnd();
     }
     fn get_next_cap(cap: usize) -> usize {
         //(cap + cap / 2).max(0x1000)
-        cap*2
+        cap * 2
     }
     fn resize(&mut self, next_cap: usize) {
         let bytes_cap = next_cap * std::mem::size_of::<T>();
@@ -206,13 +210,14 @@ impl<T: Sized> PagedVec<T> {
     /// // push outside capacity, a slow reallocation occurs, but `push` still succeeds!
     /// vec.push(5.6);
     pub fn push(&mut self, t: T) {
-        if let Err(t) = self.push_within_capacity(t) {
+        if self.len * std::mem::size_of::<T>() >= self.data.len() {
             self.resize(Self::get_next_cap(self.capacity()));
-            match self.push_within_capacity(t) {
-                Ok(_) => (),
-                Err(_) => panic!("PagedVec expanded, but still had not enough space for a push!"),
-            }
         }
+        unsafe {
+            let end = self.as_mut_ptr().add(self.len);
+            std::ptr::write(end, t);
+            self.len += 1;
+        };
     }
     /// Gets the capacity of `self`.
     /// ```
@@ -277,6 +282,7 @@ impl<T: Sized> PagedVec<T> {
     pub fn clear(&mut self) {
         self.drop_all();
         self.len = 0;
+        self.data.decomit(0, self.data.len());
     }
     fn drop_all(&mut self) {
         use std::mem::MaybeUninit;

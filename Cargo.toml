@@ -9,7 +9,7 @@ repository = "https://github.com/FractalFir/pages"
 [target.'cfg(windows)'.dependencies]
 winapi = {version = "0.3.9",features = ["memoryapi","errhandlingapi"]}
 [dev-dependencies]
-bencher = "0.1.5"
+criterion = "0.3"
 [[bench]]
 name = "alloc_cmp"
 harness = false
@@ -18,5 +18,5 @@ deafault = ["deny_xw"]
 deny_xw = []
 allow_exec = []
 [profile.bench]
-debug = true
+#debug = true
 

@@ -16,17 +16,17 @@
 #![warn(missing_docs)]
 #![warn(rustdoc::missing_doc_code_examples)]
 
-#[cfg(any(feature = "allow_exec",doc))]
+#[cfg(any(feature = "allow_exec", doc, test))]
 mod extern_fn_ptr;
 mod paged_vec;
-#[cfg(any(feature = "allow_exec",doc))]
+#[cfg(any(feature = "allow_exec", doc, test))]
 use core::fmt::Pointer;
-#[cfg(any(feature = "allow_exec",doc))]
+#[cfg(any(feature = "allow_exec", doc, test))]
 mod fn_ref;
-#[cfg(any(feature = "allow_exec",doc))]
+#[cfg(any(feature = "allow_exec", doc, test))]
 use extern_fn_ptr::ExternFnPtr;
 #[doc(inline)]
-#[cfg(any(feature = "allow_exec",doc))]
+#[cfg(any(feature = "allow_exec", doc, test))]
 pub use fn_ref::*;
 #[doc(inline)]
 pub use paged_vec::*;
@@ -143,9 +143,9 @@ impl WritePremisionMarker for DenyWrite {
 /// Set [`AllowExec`] permission  only if you can be sure that:
 /// 1. Native instructions inside this Pages are 100% safe
 /// 2. Native instructions inside this Pages may only ever be changed by a 100% safe code. Preferably, set Pages to allow execution only when writes are disabled. To do this flip in one call, use [`Pages::set_protected_exec`].
-#[cfg(any(feature = "allow_exec",doc))]
+#[cfg(any(feature = "allow_exec", doc, test))]
 pub struct AllowExec;
-#[cfg(any(feature = "allow_exec",doc))]
+#[cfg(any(feature = "allow_exec", doc, test))]
 impl ExecPremisionMarker for AllowExec {
     #[cfg(target_family = "unix")]
     fn bitmask() -> c_int {
@@ -256,7 +256,7 @@ impl<R: ReadPremisionMarker, W: WritePremisionMarker, E: ExecPremisionMarker> Pa
     }
     /// Advises this [`Pages`] that `used` bytes are going to be in use soon.
     /// # Beware
-    /// Usage hints are part of fine-grain memory access adjustments. It is *NOT* always beneficial to use, in 
+    /// Usage hints are part of fine-grain memory access adjustments. It is *NOT* always beneficial to use, in
     /// contrary, it very often slows allocations down. Before using those hints, test each usage.
     pub fn advise_use_soon(&mut self, used: usize) {
         #[cfg(target_family = "unix")]
@@ -268,7 +268,7 @@ impl<R: ReadPremisionMarker, W: WritePremisionMarker, E: ExecPremisionMarker> Pa
     }
     /// Advises this [`Pages`] that it is going to be accessed sequentially.
     /// # Beware
-    /// Usage hints are part of fine-grain memory access adjustments. It is *NOT* always beneficial to use, in 
+    /// Usage hints are part of fine-grain memory access adjustments. It is *NOT* always beneficial to use, in
     /// contrary, it very often slows allocations down. Before using those hints, test each usage.
     pub fn advise_use_seq(&mut self) {
         #[cfg(target_family = "unix")]
@@ -279,7 +279,7 @@ impl<R: ReadPremisionMarker, W: WritePremisionMarker, E: ExecPremisionMarker> Pa
     }
     /// Advises this [`Pages`] that it is going to be accessed randomly.
     /// # Beware
-    /// Usage hints are part of fine-grain memory access adjustments. It is *NOT* always beneficial to use, in 
+    /// Usage hints are part of fine-grain memory access adjustments. It is *NOT* always beneficial to use, in
     /// contrary, it very often slows allocations down. Before using those hints, test each usage.
     pub fn advise_use_rnd(&mut self) {
         #[cfg(target_family = "unix")]
@@ -381,19 +381,29 @@ impl<R: ReadPremisionMarker, W: WritePremisionMarker, E: ExecPremisionMarker> Pa
         res.set_prot();
         res
     }
-    fn decomit(&mut self,begining:usize,length:usize){
-        let decomit_len = length.min(self.len - begining);
+    /// Releases physical memory pages behind the region starting at page `beginning` is in, and continuing till page `beginning + length` is in. Those pages will be given backing the next time they are accessed.
+    /// # Beware
+    /// After calling `decommit` data inside those pages will be wiped and then the content of those pages will be implementation dependent and should not be relied upon to be 0.
+    pub fn decomit(&mut self, beginning: usize, length: usize) {
+        let decomit_len = length.min(self.len - beginning);
         #[cfg(target_os = "windows")]
         unsafe {
-            let res = DiscardVirtualMemory((self.ptr as usize + begining) as *mut winapi::ctypes::c_void,decomit_len);
-            if (res != 0) && cfg!(debug_assertions){
+            let res = DiscardVirtualMemory(
+                (self.ptr as usize + beginning) as *mut winapi::ctypes::c_void,
+                decomit_len,
+            );
+            if (res != 0) && cfg!(debug_assertions) {
                 panic!("DiscardVirtualMemory failed.");
             }
         }
         #[cfg(target_family = "unix")]
         unsafe {
-            const MADV_DONTNEED:c_int = 4;
-            posix_madvise((self.ptr as usize + begining) as *mut c_void, length,MADV_DONTNEED); 
+            const MADV_DONTNEED: c_int = 4;
+            posix_madvise(
+                (self.ptr as usize + beginning) as *mut c_void,
+                decomit_len,
+                MADV_DONTNEED,
+            );
         }
     }
 }
@@ -401,11 +411,11 @@ impl<E: ExecPremisionMarker> Pages<AllowRead, AllowWrite, E> {
     /// Changes the size of this [`Pages`]
     /// # Waring
     /// ## Pointer invalidation
-    /// *Rust mutable borrow rules prevent this from happening in safe code. This section only concerns pointers to 
+    /// *Rust mutable borrow rules prevent this from happening in safe code. This section only concerns pointers to
     /// data inside pages.*
-    /// 
-    /// A [`Self::resize`] call is very similar to `realloc` function in it's working and effects. While it tries to 
-    /// resize by adding more memory pages, if it can't do that, it will allocate new pages on a completely different 
+    ///
+    /// A [`Self::resize`] call is very similar to `realloc` function in it's working and effects. While it tries to
+    /// resize by adding more memory pages, if it can't do that, it will allocate new pages on a completely different
     /// location, and copy data there. This means that any pointer to data inside [`Pages`] becomes invalid.
     /// # Example
     /// ```
@@ -566,7 +576,7 @@ impl<R: ReadPremisionMarker, W: WritePremisionMarker, E: ExecPremisionMarker> Pa
     /// exploits. Use *only* if you know what you are doing. [`Self::set_protected_exec`] is a safer alternative, that prevents
     /// most ways an ACE exploit could occur.
     #[must_use]
-    #[cfg(any(feature = "allow_exec",doc))]
+    #[cfg(any(feature = "allow_exec", doc, test))]
     pub fn allow_exec(self) -> Pages<R, W, AllowExec> {
         self.into_prot()
     }
@@ -574,13 +584,13 @@ impl<R: ReadPremisionMarker, W: WritePremisionMarker, E: ExecPremisionMarker> Pa
     /// [`Pages`]. To re-enable writes, use [`Self::allow_write_no_exec`] to ensure both [`AllowExec`] and [`AllowExec`] are
     /// never set at the same time.
     #[must_use]
-    #[cfg(any(feature = "allow_exec",doc))]
+    #[cfg(any(feature = "allow_exec", doc, test))]
     pub fn set_protected_exec(self) -> Pages<R, DenyWrite, AllowExec> {
         self.into_prot()
     }
     /// Sets the permission on [`Pages`] to [`DenyExec`], forbidding execution.
     #[must_use]
-    #[cfg(any(feature = "allow_exec",doc))]
+    #[cfg(any(feature = "allow_exec", doc, test))]
     pub fn deny_exec(self) -> Pages<R, W, DenyExec> {
         self.into_prot()
     }
@@ -604,7 +614,7 @@ impl<R: ReadPremisionMarker, E: ExecPremisionMarker> Pages<R, AllowWrite, E> {
         }
     }
 }
-#[cfg(any(feature = "allow_exec",doc))]
+#[cfg(any(feature = "allow_exec", doc, test))]
 impl<R: ReadPremisionMarker, W: WritePremisionMarker> Pages<R, W, AllowExec> {
     /// Returns a pointer to executable code at *offset*. Works similary to getting a pointer using [`Self::get_ptr`] or
     /// [`Self::get_ptr_mut`] but ensures that execute permission is set to allow(if not this function is unavailable), and
