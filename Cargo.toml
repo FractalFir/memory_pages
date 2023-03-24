@@ -17,3 +17,6 @@ harness = false
 deafault = ["deny_xw"]
 deny_xw = []
 allow_exec = []
+[profile.bench]
+debug = true
+

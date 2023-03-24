@@ -1,7 +1,7 @@
 # Pages: High level API for low level memory management
 While using low-level memory management can provide substantial benefits to projects, it is very often cumbersome. The APIs differ between OS-s and have many pitfalls one can fall into. But what if all of the unsafety of those APIs, all of the differences could be abstracted away at little to no cost? What if you could do fine-grain memory management without ever seeing a pointer? This crate provides such an API.
 ## Safety by strict typing
-One of the common pitfalls of using low-level APIs is the ease of making mistakes regarding page permissions. Mixing them up can at best lead to a segfault, and at worst introduce serious security vulnerabilities. This crate leverages rusts type system(zero sized marker types) to make certain kinds of errors simply impossible. Acquiring a mutable  reference to data that was marked as read-only is not going to be a sudden surprise at runtime. A collection of memory pages, called, unsurprisingly `Pages`, must have a `AllowWrite` marker type. This turns all sorts of runtime errors into compile-time ones, making it impossible to miss them.
+One of the common pitfalls of using low-level APIs is the ease of making mistakes regarding page permissions. Mixing them up can at best lead to a segfault, and at worst introduce serious security vulnerabilities. This crate leverages rusts type system(zero sized marker types) to make certain kinds of errors simply impossible. Acquiring a mutable  reference to data that was marked as read-only is not going to lead to a *rapid unplanned program finish* at runtime. A collection of memory pages, called, unsurprisingly, `Pages`, must have a `AllowWrite` marker type, in order to be written into. This turns all sorts of horrible runtime errors into compile-time ones, making it impossible to miss them.
 ## Holds your hand, but does not hold you back. 
 This crate provides safe APIs for almost every functionality it has, besides parts of the API that are inherently unsafe.
 99% of things you can be using this crate for can be done conveniently without ever uttering the forbidden word `unsafe`.
@@ -38,7 +38,8 @@ let add:extern "C" fn(u64,u64)->u64 = unsafe{memory.get_fn(0)};
 assert_eq!(add(43,34),77);
 ```
 ## PagedVec
-
+```rust
+```
 # Benchmark setup
 Benchmark setup has been altered to run benchmarks for much longer times(10x) in order to reduce noise.
 

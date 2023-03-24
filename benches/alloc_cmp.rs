@@ -108,6 +108,44 @@ fn push_test_arr_v(bench: &mut Bencher) {
         bencher::black_box(&mut vec);
     };
 }
+fn random_rw_pv(bench: &mut Bencher){
+    use pages::*;
+    //vec.advise_use_rnd();
+    fn prep()->PagedVec<f64>{
+        let mut vec = PagedVec::new(0x1000_000);
+        for i in 0..vec.capacity(){
+            let val = (i as f64)*3.14159;
+            vec.push(val * val*2.1224);
+        }
+        vec
+    }
+    let mut vec = prep();
+    let mut idx = 0;
+    bench.iter(|| {
+        for _ in 0..100_000{
+            vec[idx^17963] = vec[(idx^28428)];
+            idx = (idx+1).min(vec.len());
+        }
+    });
+}
+fn random_rw_v(bench: &mut Bencher){
+    fn prep()->Vec<f64>{
+        let mut vec =  Vec::with_capacity(0x1000_000);
+        for i in 0..vec.capacity(){
+            let val = (i as f64)*3.14159;
+            vec.push(val * val*2.1224);
+        }
+        vec
+    }
+    let mut vec = prep();
+    let mut idx = 0;
+    bench.iter(|| {
+        for _ in 0..100_000{
+            vec[idx^17963] = vec[(idx^28428)];
+            idx = (idx+1).min(vec.len());
+        }
+    });
+}
 benchmark_group!(
     benches,
     system_alloc,
@@ -118,5 +156,7 @@ benchmark_group!(
     push_10_000_000_f64_v,
     push_test_arr_pv,
     push_test_arr_v,
+    random_rw_pv,
+    random_rw_v,
 );
 benchmark_main!(benches);

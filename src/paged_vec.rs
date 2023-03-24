@@ -83,6 +83,13 @@ impl<T: Sized> PagedVec<T> {
     pub fn advise_use_seq(&mut self) {
         self.data.advise_use_seq();
     }
+    /// Advises this [`PagedVec`] that it is going to be accessed randomly.
+    /// # Beware
+    /// Usage hints are part of fine-grain memory access adjustments. It is *NOT* always beneficial to use, in 
+    /// contrary, it very often slows allocations down. Before using them, test each usage.
+    pub fn advise_use_rnd(&mut self) {
+        self.data.advise_use_rnd();
+    }
     fn get_next_cap(cap: usize) -> usize {
         //(cap + cap / 2).max(0x1000)
         cap*2

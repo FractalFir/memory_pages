@@ -16,20 +16,17 @@
 #![warn(missing_docs)]
 #![warn(rustdoc::missing_doc_code_examples)]
 
-mod advise;
-#[cfg(feature = "allow_exec")]
+#[cfg(any(feature = "allow_exec",doc))]
 mod extern_fn_ptr;
 mod paged_vec;
-#[doc(inline)]
-pub use advise::*;
-#[cfg(feature = "allow_exec")]
+#[cfg(any(feature = "allow_exec",doc))]
 use core::fmt::Pointer;
-#[cfg(feature = "allow_exec")]
+#[cfg(any(feature = "allow_exec",doc))]
 mod fn_ref;
-#[cfg(feature = "allow_exec")]
+#[cfg(any(feature = "allow_exec",doc))]
 use extern_fn_ptr::ExternFnPtr;
 #[doc(inline)]
-#[cfg(feature = "allow_exec")]
+#[cfg(any(feature = "allow_exec",doc))]
 pub use fn_ref::*;
 #[doc(inline)]
 pub use paged_vec::*;
@@ -146,9 +143,9 @@ impl WritePremisionMarker for DenyWrite {
 /// Set [`AllowExec`] permission  only if you can be sure that:
 /// 1. Native instructions inside this Pages are 100% safe
 /// 2. Native instructions inside this Pages may only ever be changed by a 100% safe code. Preferably, set Pages to allow execution only when writes are disabled. To do this flip in one call, use [`Pages::set_protected_exec`].
-#[cfg(feature = "allow_exec")]
+#[cfg(any(feature = "allow_exec",doc))]
 pub struct AllowExec;
-#[cfg(feature = "allow_exec")]
+#[cfg(any(feature = "allow_exec",doc))]
 impl ExecPremisionMarker for AllowExec {
     #[cfg(target_family = "unix")]
     fn bitmask() -> c_int {
@@ -260,24 +257,35 @@ impl<R: ReadPremisionMarker, W: WritePremisionMarker, E: ExecPremisionMarker> Pa
     /// Advises this [`Pages`] that `used` bytes are going to be in use soon.
     /// # Beware
     /// Usage hints are part of fine-grain memory access adjustments. It is *NOT* always beneficial to use, in 
-    /// contrary, it very often slows allocations down. Before using them, test each usage.
+    /// contrary, it very often slows allocations down. Before using those hints, test each usage.
     pub fn advise_use_soon(&mut self, used: usize) {
         #[cfg(target_family = "unix")]
         unsafe {
             let ad_len = self.len.min(used);
-            const MADV_WILLNEED: c_int = 3;
-            posix_madvise(self.ptr as *mut c_void, ad_len, MADV_WILLNEED);
+            const POSIX_MADV_WILLNEED: c_int = 3;
+            posix_madvise(self.ptr as *mut c_void, ad_len, POSIX_MADV_WILLNEED);
         }
     }
     /// Advises this [`Pages`] that it is going to be accessed sequentially.
     /// # Beware
     /// Usage hints are part of fine-grain memory access adjustments. It is *NOT* always beneficial to use, in 
-    /// contrary, it very often slows allocations down. Before using them, test each usage.
+    /// contrary, it very often slows allocations down. Before using those hints, test each usage.
     pub fn advise_use_seq(&mut self) {
         #[cfg(target_family = "unix")]
         unsafe {
             const POSIX_MADV_SEQUENTIAL: c_int = 2;
             posix_madvise(self.ptr as *mut c_void, self.len, POSIX_MADV_SEQUENTIAL);
+        }
+    }
+    /// Advises this [`Pages`] that it is going to be accessed randomly.
+    /// # Beware
+    /// Usage hints are part of fine-grain memory access adjustments. It is *NOT* always beneficial to use, in 
+    /// contrary, it very often slows allocations down. Before using those hints, test each usage.
+    pub fn advise_use_rnd(&mut self) {
+        #[cfg(target_family = "unix")]
+        unsafe {
+            const POSIX_MADV_RANDOM: c_int = 1;
+            posix_madvise(self.ptr as *mut c_void, self.len, POSIX_MADV_RANDOM);
         }
     }
     #[cfg(target_family = "windows")]
@@ -558,7 +566,7 @@ impl<R: ReadPremisionMarker, W: WritePremisionMarker, E: ExecPremisionMarker> Pa
     /// exploits. Use *only* if you know what you are doing. [`Self::set_protected_exec`] is a safer alternative, that prevents
     /// most ways an ACE exploit could occur.
     #[must_use]
-    #[cfg(feature = "allow_exec")]
+    #[cfg(any(feature = "allow_exec",doc))]
     pub fn allow_exec(self) -> Pages<R, W, AllowExec> {
         self.into_prot()
     }
@@ -566,13 +574,13 @@ impl<R: ReadPremisionMarker, W: WritePremisionMarker, E: ExecPremisionMarker> Pa
     /// [`Pages`]. To re-enable writes, use [`Self::allow_write_no_exec`] to ensure both [`AllowExec`] and [`AllowExec`] are
     /// never set at the same time.
     #[must_use]
-    #[cfg(feature = "allow_exec")]
+    #[cfg(any(feature = "allow_exec",doc))]
     pub fn set_protected_exec(self) -> Pages<R, DenyWrite, AllowExec> {
         self.into_prot()
     }
     /// Sets the permission on [`Pages`] to [`DenyExec`], forbidding execution.
     #[must_use]
-    #[cfg(feature = "allow_exec")]
+    #[cfg(any(feature = "allow_exec",doc))]
     pub fn deny_exec(self) -> Pages<R, W, DenyExec> {
         self.into_prot()
     }
@@ -596,7 +604,7 @@ impl<R: ReadPremisionMarker, E: ExecPremisionMarker> Pages<R, AllowWrite, E> {
         }
     }
 }
-#[cfg(feature = "allow_exec")]
+#[cfg(any(feature = "allow_exec",doc))]
 impl<R: ReadPremisionMarker, W: WritePremisionMarker> Pages<R, W, AllowExec> {
     /// Returns a pointer to executable code at *offset*. Works similary to getting a pointer using [`Self::get_ptr`] or
     /// [`Self::get_ptr_mut`] but ensures that execute permission is set to allow(if not this function is unavailable), and
