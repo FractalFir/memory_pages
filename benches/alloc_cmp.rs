@@ -22,7 +22,7 @@ fn system_alloc(bench: &mut Criterion) {
     });
 }
 fn page_alloc(bench: &mut Criterion) {
-    use pages::*;
+    use memory_pages::*;
     bench.bench_function("page_alloc", |b| {
         b.iter(|| {
             let _page: Pages<AllowRead, AllowWrite, DenyExec> = Pages::new(BIG_ALLOC_SIZE);
@@ -41,7 +41,7 @@ fn small_system_alloc(bench: &mut Criterion) {
     });
 }
 fn small_page_alloc(bench: &mut Criterion) {
-    use pages::*;
+    use memory_pages::*;
     bench.bench_function("small_page_alloc", |b| {
         b.iter(|| {
             let _page: Pages<AllowRead, AllowWrite, DenyExec> = Pages::new(BIG_ALLOC_SIZE);
@@ -50,7 +50,7 @@ fn small_page_alloc(bench: &mut Criterion) {
 }
 
 fn push_10m_f64_pv(bench: &mut Criterion) {
-    use pages::*;
+    use memory_pages::*;
     let mut vec = PagedVec::new(1_000_000);
     bench.bench_function("push_10m_f64_pv", |b| {
         b.iter(|| {
@@ -68,7 +68,7 @@ fn push_10m_f64_pv(bench: &mut Criterion) {
     black_box(vec);
 }
 fn push_10m_f64_v(bench: &mut Criterion) {
-    use pages::*;
+    use memory_pages::*;
     let mut vec = Vec::with_capacity(1_000_000);
     bench.bench_function("push_10m_f64_v", |b| {
         b.iter(|| {
@@ -85,7 +85,7 @@ fn push_10m_f64_v(bench: &mut Criterion) {
 }
 
 fn push_test_type_pv(bench: &mut Criterion) {
-    use pages::*;
+    use memory_pages::*;
     let mut vec = PagedVec::new(1_000_000);
     bench.bench_function("push_test_type_pv", |b| {
         b.iter(|| {
@@ -98,7 +98,7 @@ fn push_test_type_pv(bench: &mut Criterion) {
     black_box(&mut vec);
 }
 fn push_test_type_v(bench: &mut Criterion) {
-    use pages::*;
+    use memory_pages::*;
     let mut vec = Vec::with_capacity(1_000_000);
     bench.bench_function("push_test_type_v", |b| {
         b.iter(|| {
@@ -111,7 +111,7 @@ fn push_test_type_v(bench: &mut Criterion) {
     black_box(&mut vec);
 }
 fn random_rw_pv(bench: &mut Criterion) {
-    use pages::*;
+    use memory_pages::*;
     fn prep() -> PagedVec<usize> {
         let mut vec = PagedVec::new(0x1000_000);
         for i in 0..vec.capacity() {

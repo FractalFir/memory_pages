@@ -4,10 +4,16 @@ While using low-level memory management in a project can provide substantial ben
 This crate is mostly meant for performance critical projects, especially ones dealing with huge amounts of data. The APIs and types provided by this crate are not universal solutions to all problems. Since this crate is designed with those applications in mind, it can achieve great improvements(2x faster allocations) over using standard memory management. Another example of strengths of this crate is `PagedVec`-s `clear_decommit` function that not only clears the vector - it also informs the OS about the vec being cleared. This information allows the physical memory pages storing the data to be decommited, making the `PagedVec` occupy no space in the RAM until it is written into, while still having the required space reserved.
 # What does `memory_pages` provide?
 ## Safety by strict typing
-One of the common pitfalls of using low-level APIs is the ease of making mistakes regarding page permissions. Mixing them up can at best lead to a segfault, and at worst introduce serious security vulnerabilities. This crate leverages rusts type system(zero sized marker types) to make certain kinds of errors simply impossible. Acquiring a mutable  reference to data that was marked as read-only is not going to lead to a *rapid unplanned program finish* at runtime. A collection of memory pages, called, unsurprisingly, `Pages`, must have a `AllowWrite` marker type, in order to be written into. This turns all sorts of horrible runtime errors into compile-time ones, making it impossible to miss them.
+One of the common pitfalls of using low-level APIs is the ease of making mistakes regarding page permissions. Mixing them up can at best lead to a segfault, and at worst introduce serious security vulnerabilities. This crate leverages rusts type system(zero sized marker types) to make certain kinds of errors simply impossible. Trying to acquire a mutable reference, and writing into data that was marked as read-only would normally lead to a segfault and crash at runtime. A collection of memory pages, called, unsurprisingly, `Pages`, must have a `AllowWrite` marker type, in order to implement functions and traits that allow for it to be written into. This turns all sorts of horrible runtime errors into compile-time ones, making it impossible to miss them.
 ## Holds your hand, but does not hold you back. 
 This crates core philosophy is to always guide, never restrict. Almost everything that can be done with this crate can be done without ever seeing the word `unsafe`. While references and the special `FnRef` type are automatically invalidated on permission changes, those safety restrictions can be easily subverted by using unsafe functions and pointers. 
 There are some **very** unsafe APIs, which are locked behind feature gates.
+## Highly performant 
+Getting memory pages directly and cutting the middle man can be 2x faster!
+| Memory acquisition route | Speed of allocating space for 50 MB structure |
+|--------------------------|-------------------------------------|
+|Standard Allocator |6.5299 µs |
+|Allocating pages manually | 3.5670 µs|
 ## Provide useful hints to the kernel
 Use functions such as `adivse_use_soon`, `advise_use_seq`, `adivse_use_rng` to provide memory usage hints.
 ## With great power comes great responsibility
