@@ -17,20 +17,20 @@ Is the memory use going to be sequential or random? Provide optional hints to th
 # Examples
 ## Dealing with pages directly
 ### Data storage
-```
+```rust
 use memory_pages::*;
 let mut memory = Pages<AllowRead,AllowWrite,DenyExec> = Pages::new(0x40000);
 read_data(&mut memory).unwrap();
 validate_data(&mut memory);
 ```
 ### Prevent writes
-```
+```rust
 use memory_pages::*;
 let mut memory = Pages<AllowRead,AllowWrite,DenyExec> = Pages::new(0x40000);
 read_data(&mut memory).unwrap();
 let mut memory.deny_write();
-// Meomery is now read-only and a write attempt would case a segfault
-// This function is now not avalible, so it would not compile
+// `memory` is now read-only and a write attempt would case a segfault
+// Because of that this function is now not avalible, so this would not compile if used
 // write_data(&mut memory);
 ```
 ### x86_64 function assembled at run-time
