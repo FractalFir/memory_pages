@@ -30,7 +30,7 @@ let mut memory = Pages<AllowRead,AllowWrite,DenyExec> = Pages::new(0x40000);
 read_data(&mut memory).unwrap();
 let mut memory.deny_write();
 // `memory` is now read-only and a write attempt would case a segfault
-// Because of that this function is now not avalible, so this would not compile if used
+// Because of that, borrowing it as `&mut [u8]` is now not avalible, so this would not compile if used
 // write_data(&mut memory);
 ```
 ### x86_64 function assembled at run-time
