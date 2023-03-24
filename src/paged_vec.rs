@@ -282,7 +282,13 @@ impl<T: Sized> PagedVec<T> {
     pub fn clear(&mut self) {
         self.drop_all();
         self.len = 0;
-        self.data.decomit(0, self.data.len());
+    }
+    /// Works exacly the same as [`Self::clear`] but hints the OS that some of the memory occupied by data inside this 
+    /// [`PagedVec`] is going to be unused, allowing it to be temporarily reclaimed. This allows the memory to be 
+    /// reserved, but not backed by physical RAM until next use, reducing RAM usage.
+    pub fn clear_decommit(&mut self){
+        self.clear();
+        self.data.decommit(0, self.data.len());
     }
     fn drop_all(&mut self) {
         use std::mem::MaybeUninit;

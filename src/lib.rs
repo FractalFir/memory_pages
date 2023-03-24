@@ -295,7 +295,7 @@ impl<R: ReadPremisionMarker, W: WritePremisionMarker, E: ExecPremisionMarker> Pa
         let ptr =
             unsafe { VirtualAlloc(std::ptr::null_mut(), length, MEM_COMMIT, Self::flProtect()) }
                 .cast::<u8>();
-        if ptr as usize == 0 {
+        if ptr.is_null(){
             let err = unsafe { winapi::um::errhandlingapi::GetLastError() };
             panic!("Allocation using VirtualAlloc failed with error code:{err}!");
         }
@@ -384,13 +384,13 @@ impl<R: ReadPremisionMarker, W: WritePremisionMarker, E: ExecPremisionMarker> Pa
     /// Releases physical memory pages behind the region starting at page `beginning` is in, and continuing till page `beginning + length` is in. Those pages will be given backing the next time they are accessed.
     /// # Beware
     /// After calling `decommit` data inside those pages will be wiped and then the content of those pages will be implementation dependent and should not be relied upon to be 0.
-    pub fn decomit(&mut self, beginning: usize, length: usize) {
-        let decomit_len = length.min(self.len - beginning);
+    pub fn decommit(&mut self, beginning: usize, length: usize) {
+        let decommit_len = length.min(self.len - beginning);
         #[cfg(target_os = "windows")]
         unsafe {
             let res = DiscardVirtualMemory(
                 (self.ptr as usize + beginning) as *mut winapi::ctypes::c_void,
-                decomit_len,
+                decommit_len,
             );
             if (res != 0) && cfg!(debug_assertions) {
                 panic!("DiscardVirtualMemory failed.");
@@ -401,7 +401,7 @@ impl<R: ReadPremisionMarker, W: WritePremisionMarker, E: ExecPremisionMarker> Pa
             const MADV_DONTNEED: c_int = 4;
             posix_madvise(
                 (self.ptr as usize + beginning) as *mut c_void,
-                decomit_len,
+                decommit_len,
                 MADV_DONTNEED,
             );
         }
