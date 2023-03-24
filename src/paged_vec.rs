@@ -27,7 +27,7 @@ impl<T: Sized> PagedVec<T> {
     /// Creates a new [`PagedVec`] with specified `capacity`.
     /// # Examples
     /// ```
-    /// # use pages::*;
+    /// # use memory_pages::*;
     /// // capacity must be specified!
     /// let mut vec = PagedVec::new(0x1000);
     /// vec.push_within_capacity(0.0).unwrap();
@@ -48,7 +48,7 @@ impl<T: Sized> PagedVec<T> {
     /// Pushes `t` into `self` if under capacity, else returns `t`.
     /// # Examples
     /// ```
-    /// # use pages::*;
+    /// # use memory_pages::*;
     /// let mut vec = PagedVec::new(0x1000);
     /// // Push is within capacity, OK!
     /// vec.push_within_capacity(0.0).unwrap();
@@ -115,7 +115,7 @@ impl<T: Sized> PagedVec<T> {
     /// or equal to self.len() + additional. Does nothing if capacity is already sufficient.
     /// # Examples
     /// ```
-    /// # use pages::*;
+    /// # use memory_pages::*;
     /// let mut vec:PagedVec<u8> = PagedVec::new(0x4000);
     /// let init_cap = vec.capacity();
     /// // Capacity was less or equal to current capacity, no need to reallocate.
@@ -141,7 +141,7 @@ impl<T: Sized> PagedVec<T> {
     /// reallocation's of [`PagedVec`] are slow.
     /// # Examples
     /// ```
-    /// # use pages::*;
+    /// # use memory_pages::*;
     /// let mut vec:PagedVec<u8> = PagedVec::new(0x4000);
     /// let init_cap = vec.capacity();
     /// // Capacity was less or equal to current capacity, no need to reallocate.
@@ -169,7 +169,7 @@ impl<T: Sized> PagedVec<T> {
     ///
     /// # Examples
     /// ```
-    /// # use pages::PagedVec;
+    /// # use memory_pages::PagedVec;
     /// let mut v = PagedVec::new(3);
     /// v.push(1);
     /// v.push(2);
@@ -200,7 +200,7 @@ impl<T: Sized> PagedVec<T> {
     /// Pushes `t` into `self` if under capacity, else returns `t`.
     /// # Examples
     /// ```
-    /// # use pages::*;
+    /// # use memory_pages::*;
     /// let mut vec = PagedVec::new(0x1000);
     /// // Push is within capacity, no realocations!
     /// vec.push(0.0);
@@ -221,7 +221,7 @@ impl<T: Sized> PagedVec<T> {
     }
     /// Gets the capacity of `self`.
     /// ```
-    /// # use pages::*;
+    /// # use memory_pages::*;
     /// let mut vec = PagedVec::new(0x1000);
     /// // `vec` can store `cap` items in total.
     /// let cap = vec.capacity();
@@ -241,7 +241,7 @@ impl<T: Sized> PagedVec<T> {
     }
     /// Pops the last element from `self`
     /// ```
-    /// # use pages::*;
+    /// # use memory_pages::*;
     /// let mut vec = PagedVec::new(0x1000);
     /// vec.push(0);
     /// vec.push(1);
@@ -269,7 +269,7 @@ impl<T: Sized> PagedVec<T> {
     /// Clears the vector, removing all values.
     /// # Examples
     /// ```
-    /// # use pages::*;
+    /// # use memory_pages::*;
     /// let mut vec = PagedVec::new(0x1000);
     /// vec.push(8);
     /// let cap = vec.capacity();

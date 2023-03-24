@@ -1,10 +1,10 @@
 [package]
-name = "pages"
+name = "memory_pages"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/FractalFir/pages"
-description = "`pages` provides a cross-platform memory management API which allows for acquiring memory pages from the kernel and setting permissions on them."
+repository = "https://github.com/FractalFir/memory_pages"
+description = "`memory_pages` provides a cross-platform memory management API which allows for acquiring memory pages from the kernel and setting permissions on them."
 categories = ["memory-management","data-structures"]
 keywords = ["memory","memory_management","pages","vec","allocator"]
 authors = ["FractalFir <fractalfirdev@gmail.com>"]

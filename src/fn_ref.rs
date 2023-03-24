@@ -23,7 +23,7 @@ impl<'a, F: ExternFnPtr + Copy> FnRef<'a, F> {
     /// It is up to the user to ensure [`Pages`] returned function resides in lives long enough.
     /// # Examples
     /// ```
-    /// # use pages::*;
+    /// # use memory_pages::*;
     /// let mut memory:Pages<AllowRead,AllowWrite,DenyExec> = Pages::new(0x4000);
     /// // X86_64 assembly instruction `RET`
     /// memory[0] = 0xC3;

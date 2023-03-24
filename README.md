@@ -1,8 +1,8 @@
-# Pages: High level API for low level memory management
+# memory_pages: High level API for low level memory management
 While using low-level memory management in a project can provide substantial benefits, it is very often cumbersome. The API-s differ significantly between OS-s and have many pitfalls one can easily fall into. But what if, all the unsafety, all the platform-specific differences could be simply abstracted away? What if you could do very fine-grain memory adjustments without ever seeing a pointer? This crate provides such zero-cost abstractions.
 ## For who it is for?
 This crate is mostly meant for performance critical projects, especially ones dealing with huge amounts of data. The APIs and types provided by this crate are not universal solutions to all problems. Since this crate is designed with those applications in mind, it can achieve great improvements(2x faster allocations) over using standard memory management. Another example of strengths of this crate is `PagedVec`-s `clear_decommit` function that not only clears the vector - it also informs the OS about the vec being cleared. This information allows the physical memory pages storing the data to be decommited, making the `PagedVec` occupy no space in the RAM until it is written into, while still having the required space reserved.
-# What does `pages` provide?
+# What does `memory_pages` provide?
 ## Safety by strict typing
 One of the common pitfalls of using low-level APIs is the ease of making mistakes regarding page permissions. Mixing them up can at best lead to a segfault, and at worst introduce serious security vulnerabilities. This crate leverages rusts type system(zero sized marker types) to make certain kinds of errors simply impossible. Acquiring a mutable  reference to data that was marked as read-only is not going to lead to a *rapid unplanned program finish* at runtime. A collection of memory pages, called, unsurprisingly, `Pages`, must have a `AllowWrite` marker type, in order to be written into. This turns all sorts of horrible runtime errors into compile-time ones, making it impossible to miss them.
 ## Holds your hand, but does not hold you back. 
@@ -18,14 +18,14 @@ Is the memory use going to be sequential or random? Provide optional hints to th
 ## Dealing with pages directly
 ### Data storage
 ```
-use pages::*;
+use memory_pages::*;
 let mut memory = Pages<AllowRead,AllowWrite,DenyExec> = Pages::new(0x40000);
 read_data(&mut memory).unwrap();
 validate_data(&mut memory);
 ```
 ### Prevent writes
 ```
-use pages::*;
+use memory_pages::*;
 let mut memory = Pages<AllowRead,AllowWrite,DenyExec> = Pages::new(0x40000);
 read_data(&mut memory).unwrap();
 let mut memory.deny_write();
@@ -36,7 +36,7 @@ let mut memory.deny_write();
 ### x86_64 function assembled at run-time
 This example does not work on windows, due to differences in the calling conventions
 ```rust
-use pages::*;
+use memory_pages::*;
 let mut memory:Pages<AllowRead,AllowWrite,DenyExec> = Pages::new(0x4000);
 // hex-encoded X86_64 assembly for adding 2 numbers
 // lea 	rax, [rdi+rsi]

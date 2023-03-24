@@ -1,6 +1,6 @@
 #![cfg_attr(feature = "fn_traits", feature(fn_traits))]
 #![cfg_attr(feature = "fn_traits", feature(unboxed_closures))]
-//! `pages` is a small crate providing a cross-platform API to request pages from kernel with certain permission modes
+//! `memory_pages` is a small crate providing a cross-platform API to request pages from kernel with certain permission modes
 //! set(read,write,execute). It provides an very safe API to aid in many use cases, mainly:
 //! 1. Speeds up operating on large data sets: [`PagedVec`] provides allocation speed advantages over standard [`Vec`] for large data.
 //! types.
@@ -233,13 +233,13 @@ impl<R: ReadPremisionMarker, W: WritePremisionMarker, E: ExecPremisionMarker> Pa
     /// # Examples
     /// Allocating pages works with sizes divisible by size of the page:
     ///```
-    /// # use pages::*;
+    /// # use memory_pages::*;
     /// let memory:Pages<AllowRead,AllowWrite,DenyExec> = Pages::new(0x8000);
     /// assert_eq!(memory.len(),0x8000);
     ///```
     /// And allocation sized not divisible by the size of the page:
     ///```
-    /// # use pages::*;
+    /// # use memory_pages::*;
     /// let memory:Pages<AllowRead,AllowWrite,DenyExec> = Pages::new(0x1234);
     /// // Rounds up to the next page boundary, so that length of the actual allocation
     /// // may never be less than requested length.
@@ -247,7 +247,7 @@ impl<R: ReadPremisionMarker, W: WritePremisionMarker, E: ExecPremisionMarker> Pa
     ///```
     /// 0-sized allocations will always fail.
     /// ```should_panic
-    /// # use pages::*;
+    /// # use memory_pages::*;
     /// let memory:Pages<AllowRead,AllowWrite,DenyExec> = Pages::new(0);
     ///```
     #[must_use]
@@ -419,7 +419,7 @@ impl<E: ExecPremisionMarker> Pages<AllowRead, AllowWrite, E> {
     /// location, and copy data there. This means that any pointer to data inside [`Pages`] becomes invalid.
     /// # Example
     /// ```
-    /// # use pages::*;
+    /// # use memory_pages::*;
     /// let mut pages:Pages<AllowRead,AllowWrite,DenyExec> = Pages::new(0x1_000);
     /// let prev_len = pages.len();
     /// // Resizing pages changes their length.
@@ -499,14 +499,14 @@ impl<R: ReadPremisionMarker, W: WritePremisionMarker, E: ExecPremisionMarker> Pa
     /// # Examples
     /// Type system enforces high degree of safety!
     /// ```compile_fail
-    ///  # use pages::*;
+    ///  # use memory_pages::*;
     /// let mut memory:Pages<AllowRead,DenyWrite,DenyExec> = Pages::new(0x1000);
     /// // this function is not available, if AllowWrite is not set, so this won't compile, preventing mistakes!
     /// memory[8] = 64;
     /// ```
     /// Using [`Self::allow_write`] sets `AllowWrite` on type, allowing checks to run at compile time.
     /// ```
-    /// # use pages::*;
+    /// # use memory_pages::*;
     /// let memory:Pages<AllowRead,DenyWrite,DenyExec> = Pages::new(0x1000);
     /// // .allow_write() changes the type, allowing for writes!
     /// let mut memory:Pages<AllowRead,AllowWrite,DenyExec> = memory.allow_write();
@@ -514,7 +514,7 @@ impl<R: ReadPremisionMarker, W: WritePremisionMarker, E: ExecPremisionMarker> Pa
     /// ```
     /// Type annotations are not needed
     /// ```
-    /// # use pages::*;
+    /// # use memory_pages::*;
     /// let memory:Pages<AllowRead,DenyWrite,DenyExec> = Pages::new(0x1000);
     /// // .allow_write() changes the type, allowing for writes!
     /// let mut memory = memory.allow_write();
@@ -522,7 +522,7 @@ impl<R: ReadPremisionMarker, W: WritePremisionMarker, E: ExecPremisionMarker> Pa
     /// ```
     /// Calling `allow_write` on type that already allows writes is a NOP.
     /// ```
-    /// # use pages::*;
+    /// # use memory_pages::*;
     /// let memory:Pages<AllowRead,AllowWrite,DenyExec> = Pages::new(0x1000);
     /// // .allow_write() is a nop
     /// let mut memory = memory.allow_write();
@@ -530,7 +530,7 @@ impl<R: ReadPremisionMarker, W: WritePremisionMarker, E: ExecPremisionMarker> Pa
     /// ```
     /// `allow_write` always invalidates previous references.
     /// ```
-    /// # use pages::*;
+    /// # use memory_pages::*;
     /// let memory:Pages<AllowRead,DenyWrite,DenyExec> = Pages::new(0x1000);
     /// let slice = memory.get(0..100).unwrap();
     /// let mut memory = memory.allow_write();
@@ -543,7 +543,7 @@ impl<R: ReadPremisionMarker, W: WritePremisionMarker, E: ExecPremisionMarker> Pa
     /// Sets the [`DenyWrite`], making data inside this [`Pages`] immutable.
     /// # Examples
     /// ```
-    /// # use pages::*;
+    /// # use memory_pages::*;
     /// let mut memory:Pages<AllowRead,AllowWrite,DenyExec> = Pages::new(0x1000);
     /// // write allowed, can alter memory inside `Pages`
     /// memory[123] = 123;
@@ -554,7 +554,7 @@ impl<R: ReadPremisionMarker, W: WritePremisionMarker, E: ExecPremisionMarker> Pa
     /// ```
     /// Memory can't be mutated after this point!
     /// ```compile_fail
-    /// # use pages::*;
+    /// # use memory_pages::*;
     /// # let mut memory:Pages<AllowRead,AllowWrite,DenyExec> = Pages::new(0x1000);
     /// # memory[123] = 123;
     /// # let mut memory = memory.deny_write();
@@ -624,21 +624,21 @@ impl<R: ReadPremisionMarker, W: WritePremisionMarker> Pages<R, W, AllowExec> {
     /// # Examples
     /// Getting a pointer with offset smaller than length of pages is OK.
     ///```
-    /// # use pages::*;
+    /// # use memory_pages::*;
     /// let memory:Pages<DenyRead,DenyWrite,AllowExec> = Pages::new(0x1000);
     /// let ptr = memory.get_fn_ptr(0);
     /// let ptr2 = memory.get_fn_ptr(2);
     ///```
     /// Getting a pointer with offset greater than length of Pages causes a panic.
     ///```should_panic
-    /// # use pages::*;
+    /// # use memory_pages::*;
     /// let memory:Pages<DenyRead,DenyWrite,AllowExec> = Pages::new(0x1000);
     /// let ptr = memory.get_fn_ptr(0x1000);
     /// let ptr = memory.get_fn_ptr(0x1001);
     ///```
     /// Defencing a pointer acquired from calling `get_fn_ptr` on `Pages` with [`DenyRead`] is an UB and may cause a segfault on some systems.
     ///```should_panic
-    /// # use pages::*;
+    /// # use memory_pages::*;
     /// let memory:Pages<DenyRead,DenyWrite,AllowExec> = Pages::new(0x1000);
     /// let ptr = memory.get_fn_ptr(0x1);
     /// let some_data:u8 = unsafe{*(ptr as *const u8)};
@@ -657,7 +657,7 @@ impl<R: ReadPremisionMarker, W: WritePremisionMarker> Pages<R, W, AllowExec> {
     /// # Example
     /// A function that just returns, and does nothing. This example is architecture specific.
     /// ```no_run
-    /// # use pages::*;
+    /// # use memory_pages::*;
     /// let mut memory:Pages<AllowRead,AllowWrite,DenyExec> = Pages::new(0x4000);
     /// // X86_64 assembly instruction `RET`
     /// memory[0] = 0xC3;
@@ -669,7 +669,7 @@ impl<R: ReadPremisionMarker, W: WritePremisionMarker> Pages<R, W, AllowExec> {
     /// ```
     /// A function that adds 2 numbers. It is architecture specific, and works on `x86_64` linux.
     /// ```no_run
-    /// # use pages::*;
+    /// # use memory_pages::*;
     /// let mut memory:Pages<AllowRead,AllowWrite,DenyExec> = Pages::new(0x4000);
     /// // encoded X86_64 assembly for adding 2 numbers
     /// memory[0] = 0x48;
