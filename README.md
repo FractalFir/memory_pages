@@ -34,7 +34,7 @@ validate_data(&mut memory);
 use memory_pages::*;
 let mut memory = Pages<AllowRead,AllowWrite,DenyExec> = Pages::new(0x40000);
 read_data(&mut memory).unwrap();
-let mut memory.deny_write();
+let mut memory = memory.deny_write();
 // `memory` is now read-only and a write attempt would case a segfault
 // Because of that, borrowing it as `&mut [u8]` is now not avalible, so this would not compile if used
 // write_data(&mut memory);
