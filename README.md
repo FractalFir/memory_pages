@@ -52,11 +52,11 @@ memory[2] = 0x04;
 memory[3] = 0x37;
 // ret
 memory[4] = 0xC3;
-// Sets execution to allow and write to denny to prevent exploits
+// Sets execution to allow and write to deny to prevent exploits
 let memory = memory.set_protected_exec();
-//TODO: this should check for lifetimes!
-let add:extern "C" fn(u64,u64)->u64 = unsafe{memory.get_fn(0)};
-assert_eq!(add(43,34),77);
+//FnRef ensures proper lifetimes!
+let add:FnRef<unsafe extern "C" fn(u64,u64)->u64> = unsafe{memory.get_fn(0)};
+unsafe{assert_eq!(add.call((43,34)),77)};
 ```
 ## PagedVec
 ### Create new vec
